@@ -5,6 +5,23 @@
 
 ---
 
+## [v1.1.1] 2026-08-15 —— UC 下载层 __pugs 令牌（联调实测）
+
+### 新增
+- 解析前“读取 Cookie 提示”弹窗（默认开，设置可关）：确认后新标签预热分享页，自动提取 __pugs 写入浏览器 jar（reverse-notes-uc.md §10）
+- CF 代理捕获 upstream `set-cookie: __pugs=` → 回传 `x-pugs` 头 → SPA 存 localStorage（§10.2 代理捕获通道）
+- curl/aria2/gopeed 导出自动注入 `Cookie: __pugs=...`（缺失时 curl 附带提示注释）
+- `_headers`：全局 `Referrer-Policy: no-referrer`（UC checkplay 只放行 drive.uc.cn 或空 referer，§10.1.4）
+
+### 修复
+- UC 下载层认定从“游客零 cookie 可下”修正为“需 __pugs 人机校验令牌（游客态即可，3h 过期）”（§10）
+
+### 变更
+- reverse-notes-uc.md 追加 §10（__pugs 唯一必需 cookie + 双通道获取 + referer 白名单实测）
+- UAC 表：UC needsCookie 置真、弹窗开关文案更新
+
+---
+
 ## [v1.0.2] 2026-08-14 —— 待 Tzz 核验
 
 ### 新增

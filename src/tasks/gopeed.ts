@@ -12,6 +12,7 @@
  */
 
 import type { ExportFile, TaskOptions } from '../core/types';
+import { getPugs } from '../core/pugs';
 
 /** 取 path 去掉文件名部分作为相对目录；根目录（无目录）返回空串 */
 function dirNameOf(path: string): string {
@@ -27,10 +28,15 @@ function fileNameOf(path: string): string {
 
 /**
  * 生成 Gopeed v1 添加任务 JSON（格式化字符串）。
+ * __pugs 下载令牌（§10）：有则注入 req.headers，无则不带。
  */
 export function generateGopeedJson(files: ExportFile[], options: TaskOptions): string {
+  const pugs = getPugs();
   const tasks = files.map(f => ({
-    req: { url: f.url },
+    req: {
+      url: f.url,
+      ...(pugs ? { headers: { Cookie: `__pugs=${pugs}` } } : {}), // §10
+    },
     store: {
       // keepStructure：相对目录（根目录用 "."）；否则仅文件名
       path: options.keepStructure ? dirNameOf(f.path) || '.' : fileNameOf(f.path),

@@ -16,6 +16,7 @@
  */
 
 import type { ExportFile, TaskOptions } from '../core/types';
+import { getPugs } from '../core/pugs';
 
 /** input-file 模式的任务文件名（与 generateAria2Command 输出保持配套） */
 export const ARIA2_INPUT_FILE_NAME = 'pan-web-tasks.txt';
@@ -37,11 +38,29 @@ function shellEscape(s: string): string {
   return s.replace(/"/g, '\\"');
 }
 
+/** __pugs 下载令牌（§10）：有则生成 aria2 header 片段，无则空串 */
+function cookieHeader(): string {
+  const pugs = getPugs();
+  return pugs ? ` --header="Cookie: __pugs=${pugs}"` : '';
+}
+
+/** input-file 里的 header 行（§10）：`  header=Cookie: __pugs=...` */
+function cookieHeaderLine(): string {
+  const pugs = getPugs();
+  return pugs ? `  header=Cookie: __pugs=${pugs}` : '';
+}
+
+/** RPC 任务选项里的 header 数组（§10） */
+function cookieHeaderArray(): string[] {
+  const pugs = getPugs();
+  return pugs ? [`Cookie: __pugs=${pugs}`] : [];
+}
+
 /**
  * 生成 aria2 命令行（keepStructure=true 时为单条 input-file 命令）。
  *
  * 不保留结构：每文件一行
- *   aria2c --continue=true --dir="<outDir>" --out="<文件名>" "<url>"
+ *   aria2c --continue=true [--header="Cookie: __pugs=..."] --dir="<outDir>" --out="<文件名>" "<url>"
  * 保留结构：单行
  *   aria2c --continue=true --input-file=pan-web-tasks.txt
  */
@@ -53,7 +72,7 @@ export function generateAria2Command(files: ExportFile[], options: TaskOptions):
   // 平铺到下载目录：outDir 未给时省略 --dir
   const dirFlag = options.outDir ? ` --dir="${shellEscape(options.outDir)}"` : '';
   return files
-    .map(f => `aria2c --continue=true${dirFlag} --out="${shellEscape(fileNameOf(f.path))}" "${f.url}"`)
+    .map(f => `aria2c --continue=true${cookieHeader()}${dirFlag} --out="${shellEscape(fileNameOf(f.path))}" "${f.url}"`)
     .join('\n');
 }
 
@@ -70,9 +89,11 @@ export function generateAria2Command(files: ExportFile[], options: TaskOptions):
  *     out=b.zip
  */
 export function generateAria2InputFile(files: ExportFile[]): string {
+  const headerLine = cookieHeaderLine();
   const lines: string[] = [];
   for (const f of files) {
     lines.push(f.url); // input-file 不走 shell，直链原样
+    if (headerLine) lines.push(headerLine); // §10：__pugs 令牌
     const dir = dirNameOf(f.path);
     if (dir) lines.push(`  dir=${dir}`);
     lines.push(`  out=${fileNameOf(f.path)}`);
@@ -104,7 +125,7 @@ export function generateAria2Rpc(files: ExportFile[], options: TaskOptions): str
       jsonrpc: '2.0',
       id: `pan-web-${i + 1}`,
       method: 'aria2.addUri',
-      params: [[f.url], { dir, out }],
+      params: [[f.url], { dir, out, header: cookieHeaderArray() }], // §10：__pugs 令牌经 header 注入
       // 占位可空：配了 --rpc-secret 时替换为 "token:<secret>" 并塞进 params 首位
       secret: null,
     };

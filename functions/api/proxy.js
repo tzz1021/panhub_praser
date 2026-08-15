@@ -4,6 +4,10 @@
  * 设计依据：docs/transport.md（传输层协议 §代理协议 / §CF Pages Functions 实现）
  * 职责：SPA 侧绕过 CORS —— 浏览器把网盘 API 请求 POST 到这里，服务端转发。
  *
+ * 额外职责（reverse-notes-uc.md §10.2）：捕获 upstream `set-cookie: __pugs=`
+ * 并回传 `x-pugs` 响应头 —— SPA 据此拿到 UC 下载层唯一必需的 __pugs 令牌，
+ * 注入 curl/aria2/gopeed 导出命令。
+ *
  * 安全模型（docs/transport.md §关键设计决策 3）：
  *   1. X-Proxy-Token 校验（env PROXY_TOKEN，部署时生成）→ 401
  *   2. 目标域名白名单（uc.cn / 后续接入的网盘域）→ 403
@@ -81,6 +85,13 @@ function checkRateLimit(request) {
   hits.push(now);
   ipHits.set(ip, hits);
   return null;
+}
+
+/** 从 Set-Cookie 响应头里提取 __pugs 值（UC 下载鉴权唯一必需 cookie，§10.1） */
+function extractPugs(setCookie) {
+  if (!setCookie) return null;
+  const m = setCookie.match(/(?:^|,)\s*__pugs=([^;]*)/);
+  return m ? m[1] : null;
 }
 
 /** 透传前清理请求头：只留白名单，cookie/authorization 一律丢弃 */
@@ -178,5 +189,10 @@ export async function onRequestPost(context) {
     ...CORS_HEADERS,
     'Content-Type': upstream.headers.get('content-type') ?? 'application/json; charset=utf-8',
   };
+  // 捕获 __pugs（UC 下载鉴权唯一必需 cookie）回传 SPA（§10.2 代理捕获通道）
+  const pugs = extractPugs(upstream.headers.get('set-cookie'));
+  if (pugs) {
+    respHeaders['x-pugs'] = pugs;
+  }
   return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
 }

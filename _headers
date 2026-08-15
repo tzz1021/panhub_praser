@@ -1,0 +1,7 @@
+# Cloudflare Pages 响应头（reverse-notes-uc.md §10.1.4）：
+# 下载直链是 top-level 导航，浏览器默认带 Referer: 本站域名；
+# UC checkplay 只放行 drive.uc.cn 或空 referer，第三方源（pages.dev/github.io）一律 403。
+# 全局 no-referrer → 下载导航不带 referer，配合 __pugs 预热即可正常下载。
+/*
+  Referrer-Policy: no-referrer
+*/

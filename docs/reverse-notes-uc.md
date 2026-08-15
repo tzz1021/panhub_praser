@@ -91,10 +91,10 @@ Origin: https://xxx.github.io → HTTP 403（服务端拒绝）
 - UI 复制必须用 `navigator.clipboard` 原生 API，禁止走文本渲染层
 - 直链有效期 **3-6 小时**（实测），过期可重新调 download 获取新直链，配合 `-C -` 断点续传
 
-### 3.4 游客下载实测成功
-- 未登录（游客）状态下，curl 下载直链返回 200，总大小 3.46GB 正常开始下载
-- 下载时带完整 cookie 组 + UC 客户端 UA 更稳（见 §5）
-- 大文件（3.7GB）游客可下，**23018 超限的临界值未知**（偏好设置里标注"临界未知"）
+### 3.4 游客下载实测成功 ⛔（2026-08-15 修正，见 §9）
+- ~~未登录（游客）状态下，curl 下载直链返回 200，总大小 3.46GB 正常开始下载~~
+- **修正：所有成功案例均带了完整 cookie 组（§5），纯无 cookie 请求会被 checkplay 掐流（§9），游客路线实际不可用**
+- 大文件（3.7GB）可下，**23018 超限的临界值未知**（偏好设置里标注"临界未知"）
 
 ## 4. 错误码映射（→ 前端中文文案）
 
@@ -138,7 +138,7 @@ Cookie:  __itrace_wid=...; ctoken=...; b-user-id=...; __sdid=...; __pugs=...（�
 - [ ] 直链下载是否存在 IP 限制（当前单 IP 实测成功，多 IP 未测）
 - [ ] 提取码分享（passcode）流程（当前测试分享无提取码）
 - [ ] 子目录多层的遍历稳定性（当前测到 2 层）
-- [ ] 下载限速：直链带 `x-oss-traffic-limit=503316480`（约 480MB 流量限制？）——大文件可能触发，需验证
+- [x] ~~下载限速：直链带 `x-oss-traffic-limit=503316480`（约 480MB 流量限制？）~~ → **已解（§9.4）：这是 60MB/s 带宽限速参数，不是字节上限**
 
 ## 8. 测试样本
 
@@ -147,3 +147,102 @@ Cookie:  __itrace_wid=...; ctoken=...; b-user-id=...; __sdid=...; __pugs=...（�
 - 文件 1：`090d1515f4794601b0818163ccfe0655`（CorelDRAW TS 2025 install.zip, 3.72GB）
 - 文件 2：`b124571b37ad453c917f429d6b4856f4`（CorelDRAW 2026 CN Repack.zip, 2.09GB）
 - 测试脚本存档：`linkswift-uc/cdp_uc_test*.js`、`uc_nocookie_test.sh`
+
+---
+
+## 9. 2026-08-15 追加：下载层 cookie 强校验（curl 双命令实测）
+
+> 追加人：小扳（与 Tzz 联调）
+
+### 9.1 实验设置（同一分享、同一文件、两条新签名直链）
+
+| 命令 | 差异 | 结果 |
+|---|---|---|
+| panhub 导出 curl（`src/tasks/curl.ts` 原样） | UA + Referer，**无 cookie** | 200 开始传输 → **提前终止**（>378B 的文件必断） |
+| LinkSwift 导出 curl | UA + Referer + **完整登录 cookie 组**（`ctoken`/`b-user-id`/`__pugs`/`__sdid` 等） | 正常下载，`-C -` 断点续传成功（同一文件、新签名 URL） |
+
+- 两条命令 URL 结构完全一致（同 object、同 `x-oss-traffic-limit`、同 callback 参数），**唯一变量是 cookie**。
+- “378 字节”不是魔法阈值，是**掐流前能吐出的数据量**的观察值：小文件（整个响应塞进这个窗口）能下完，大文件必断。
+
+### 9.2 根因：OSS 下载前回调 `checkplay` 强校验登录态
+
+直链 URL 里带 OSS callback 参数（`callbackStage: before-execute`，目标 `https://auth-cdn.uc.cn/outer/oss/checkplay`），
+回调 body 显式携带请求的 `cookie`/`referer`/`size`/`range` 等字段——**checkplay 就是拿这些校验“是不是登录用户在下载”**。
+
+- 无 cookie → 校验不通过 → 网关掐流。
+  - 2026-08-11 CDP 实测表现：直接 `403 RequestDeniedByCallback: require login [auth not found]`（LinkSwift REVERSE_NOTES v2）
+  - 2026-08-15 curl 实测表现：200 + 少量数据后掐断（`callbackFailAction: ignore` 放行后由网关侧掐流）
+- 带登录 cookie → 校验通过 → 正常下载。
+
+### 9.3 为什么“居然续传”成功
+
+- 下载服务器支持 HTTP Range；`curl -C -` 发 `Range: bytes=N-`，服务器回 206 从断点继续。
+- 续传用的是**同对象的新签名 URL**（新 Expires/Signature/x:token），不依赖上一次的连接状态。
+- 结论：**“掐断 → 重新解析拿新直链 → `-C -` 续传”是可靠策略**，前提是带上 cookie。
+
+### 9.4 修正：`x-oss-traffic-limit=503316480` 是限速不是限流量
+
+- 503316480 bit/s = **60 MiB/s 带宽上限**（阿里云 OSS 官方取值域 819200~838860800 bit/s 内）。
+- 不是“480MB 流量上限”（§7 旧猜测错误，503316480 恰好等于 480MiB 的字节数，纯巧合）。
+- 限速本身不会掐断连接，大文件断流主因仍是 §9.2 的 cookie 校验。
+
+### 9.5 修复方向（导出链路注入 cookie）
+
+1. 设置面板新增**可选**“下载 Cookie”（提示：从已登录 drive.uc.cn 的浏览器复制，仅本地存储）；
+2. `src/tasks/curl.ts`：配置了 cookie 时追加 `-b "<cookie 串>"`；
+3. aria2/gopeed 导出：追加 `Cookie: <串>` 请求头（gopeed/aria2 header 参数）；
+4. 浏览器内下载路径（`window.open(直链)` / `<a download>`）是 top-level 导航，已登录用户浏览器**自动带 SameSite 允许的 .uc.cn cookie**，大概率无需改动——待 Tzz 验证；
+5. 未配置 cookie 时导出命令附注提示“可能被掐流”。
+
+### 9.6 待验证
+
+- [ ] 浏览器内下载路径（已登录）是否无需 cookie 配置即可完整下载
+- [ ] 续传能否一路下完 3.72GB（Range 是否每次都放行、是否中途再次掐流）
+- [ ] checkplay 是否绑定 x:token 与 cookie 的账号一致性（换账号 cookie 是否拒绝）
+- [ ] 登录态 cookie 过期后是否静默退化为“掐流”而非 403
+
+---
+
+## 10. 2026-08-15 追加：`__pugs` 是唯一必需 cookie（游客态即可）——推翻“必须登录”结论
+
+> 追加人：小扳（与 Tzz 联调，curl 双命令 + 完整链路实测）
+
+### 10.1 结论（全部实测）
+
+1. **下载层只认 `__pugs` 一个 cookie**，游客态即可，不需要登录。
+   - Tzz 逐一测试 linkswift 给的 8 个 cookie：`__sdid` / `ctoken` / `b-user-id` / `__itrace_wid` / `HMACCOUNT` / 两个 Hm 时间戳全部无用；**唯一必需是 `__pugs`**（人机校验令牌，每次随机，3h 过期）。
+   - §9 的“必须登录 cookie”结论作废——当时成功案例只是恰好整套 cookie 里含 `__pugs`。
+2. **`__pugs` 由 pc-api 响应 `Set-Cookie` 下发**（Domain=uc.cn, Path=/, Max-Age=10800）：
+   ```
+   set-cookie: __pugs=b7aa098a…; Max-Age=10800; Domain=uc.cn; Path=/
+   ```
+   token/detail/download 任一接口的响应都带（实测 403 错误响应也带）。**代理/客户端直接捕获响应头即可，无需读页面 cookie。**
+3. **OSS 直链 + `__pugs` → 206/200 正常下载**（实测 `-b "__pugs=..."` + UA + 任意合法 referer 或空 referer 均通过）；**无 cookie → 403**，拒绝体是 378 字节 XML（`RequestDeniedByCallback: require login [auth not found]`）——与 Tzz 观察到的“>378 字节文件提前终止”纯巧合同数字。
+4. **referer 白名单校验（浏览器直连失败的根因）**：
+   | Referer | 结果 |
+   |---|---|
+   | （无） | 200 ✅ |
+   | `https://drive.uc.cn/` | 200 ✅ |
+   | `https://<pages.dev 或 github.io>` | **403** ❌ |
+   → SPA 部署在第三方域时，浏览器直连下载必须**去掉 referer**（`Referrer-Policy: no-referrer` 或 `rel="noreferrer"`），否则被 checkplay 拒绝。
+5. **浏览器路径需要的 `__pugs` 在浏览器自己的 cookie jar 里**：访问一次分享页（drive.uc.cn/s/xxx，页面 JS 会自动调 API）即被 Set-Cookie 写入 jar；随后 top-level 下载导航（SameSite=Lax 默认）自动携带。SPA 无法跨域写/读 .uc.cn cookie，所以浏览器路径靠“新标签页预热”，导出路径靠“代理捕获值注入命令”。
+
+### 10.2 两个获取通道（架构决策）
+
+| 通道 | 机制 | 用途 |
+|---|---|---|
+| 代理捕获 | CF Pages Function 转发 API 时提取 upstream `set-cookie: __pugs=` → 回传 `x-pugs` 响应头 → SPA 存 localStorage | curl/aria2/gopeed 导出命令注入 `-b`/header |
+| 新标签预热 | `window.open(分享页)` → 页面 JS 自动触发 API → `__pugs` 写入浏览器 jar → 稍候自动关闭标签 | 浏览器内直连下载 |
+
+### 10.3 修正旧记录
+
+- §3.1 “API 层零 cookie”：请求端确实无需携带 cookie ✅，但**响应端会下发 `__pugs`（Set-Cookie）**——不是“零 cookie 链路”，是“请求零 cookie、响应带 cookie”。
+- §3.4 “游客下载实测成功”：成立，但前提是带 `__pugs`；纯无 cookie 请求 403。
+- §5 “完整 cookie 组更稳”：实际只需 `__pugs` 一个，其余 7 个可有可无。
+- §7 “23018 临界未知”保留；`x-oss-traffic-limit` 已解（§9.4，60MB/s 限速）。
+
+### 10.4 待验证
+
+- [ ] `__pugs` 是否绑 IP/UA：代理（CF 边缘 IP）捕获的值，拿到用户本机 curl 是否仍放行（当前同 IP 实测通过，跨 IP 未测）
+- [ ] 预热标签页打开后多久 `__pugs` 落 jar（当前等待 6s 关闭，是否够）
+- [ ] 115 网盘是否同构（鸣谢 linkswift 模拟 UC 浏览器 PC 端 UA 的思路，115 浏览器同理可模拟）

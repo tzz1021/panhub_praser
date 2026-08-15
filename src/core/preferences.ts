@@ -13,8 +13,8 @@ const STORAGE_KEY = 'pan-web:prefs:v1';
 
 /**
  * 默认偏好（HANDOFF 附件 §2 默认下载方式 / §3 默认足迹保留）：
- * - 单文件、同目录批量默认都是"解析"；跨目录默认不保留结构、深度不限
- * - 弹窗：cookieWarn 默认关（UC 零 cookie，接入需 cookie 的网盘再开），其余默认开
+ * - 单文件、同目录批量默认都是“解析”；跨目录默认不保留结构、深度不限
+ * - 弹窗：cookieWarn 默认开（§10：UC 下载层需 __pugs，游客态 cookie 预热；可关），其余默认开
  * - 足迹：全保留默认开，日志等级 debug、链接/树限 100 条、日志 5MB
  */
 export const DEFAULTS: Preferences = {
@@ -35,7 +35,7 @@ export const DEFAULTS: Preferences = {
     platformTime: true,
   },
   modals: {
-    cookieWarn: false, // UC 零 cookie，默认关（见 HANDOFF §7）
+    cookieWarn: true, // §10：下载层需 __pugs（游客态），解析时弹窗预热；可关
     loginJump: true,
     autoCloseTab: true,
     batchWarn: true,

@@ -13,6 +13,7 @@ import { PanTable } from '../components/PanTable';
 import { DownloaderModal } from '../components/DownloaderModal';
 import { LoginJumpModal } from '../components/LoginJumpModal';
 import { CorsJumpModal } from '../components/CorsJumpModal';
+import { CookieWarnModal } from '../components/CookieWarnModal';
 import { useToast } from '../components/Toast';
 import { buildTree } from '../core/treeWalker';
 import { classifyError, isCorsError } from '../core/errors';
@@ -47,6 +48,8 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
   const [downloaderOpen, setDownloaderOpen] = useState(false);
   const [loginJump, setLoginJump] = useState<{ message: string } | null>(null);
   const [corsJump, setCorsJump] = useState<{ message: string } | null>(null);
+  // §10：需 cookie 的网盘（UC）解析前弹窗，确认后新标签预热 __pugs
+  const [cookieWarn, setCookieWarn] = useState<{ adapter: PanAdapter; url: string; passcode: string } | null>(null);
   const { toast } = useToast();
   const [initialValue, setInitialValue] = useState('');
   const lastPending = useRef('');
@@ -104,6 +107,53 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       toast('识别失败，请检查格式是否正确', 'error');
       return;
     }
+    const shareId = adapter.parseShareId(shareUrl);
+    if (!shareId) {
+      toast('识别失败，请检查格式是否正确', 'error');
+      return;
+    }
+    // §10：下载层需 __pugs 的网盘（UC）→ 解析前弹窗；确认后新标签预热（解析并行不阻塞）
+    const prefs = getPreferences();
+    if (prefs.modals.cookieWarn && adapter.limits.needsCookie) {
+      setCookieWarn({ adapter, url: shareUrl, passcode: pc });
+      return;
+    }
+    await runParse(adapter, shareUrl, pc);
+  };
+
+  /**
+   * UC __pugs 新标签预热（reverse-notes-uc.md §10.2 预热通道）：
+   * window.open 分享页 → 页面 JS 自动触发 API → Set-Cookie 把 __pugs 写入浏览器 jar
+   * （Domain=uc.cn）→ 稍候自动关闭标签；退出本站（pagehide）兜底清理。
+   */
+  const primeCookieTab = (shareUrl: string): void => {
+    const win = window.open(shareUrl, '_blank');
+    if (!win) {
+      toast('浏览器拦截了弹窗：下载时可能被 UC 拒绝（403），可手动打开一次分享页再下载', 'error');
+      return;
+    }
+    // 给页面 JS 触发 API、Set-Cookie 落 jar 的时间（§10.4 待验证最佳时长）
+    const timer = window.setTimeout(() => {
+      try {
+        if (!win.closed) win.close();
+      } catch {
+        /* 跨域/已接管时忽略 */
+      }
+    }, 6000);
+    const cleanup = (): void => {
+      window.clearTimeout(timer);
+      try {
+        if (!win.closed) win.close();
+      } catch {
+        /* 忽略 */
+      }
+      window.removeEventListener('pagehide', cleanup);
+    };
+    window.addEventListener('pagehide', cleanup);
+  };
+
+  /** 实际解析流程（校验与弹窗分流后进入） */
+  const runParse = async (adapter: PanAdapter, shareUrl: string, pc: string): Promise<void> => {
     const shareId = adapter.parseShareId(shareUrl);
     if (!shareId) {
       toast('识别失败，请检查格式是否正确', 'error');
@@ -230,6 +280,22 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
           message={corsJump.message}
           onClose={() => setCorsJump(null)}
           onOpenSettings={onOpenSettings}
+        />
+      )}
+      {cookieWarn && (
+        <CookieWarnModal
+          panName={cookieWarn.adapter.name}
+          onCancel={() => {
+            const { adapter: a, url: u, passcode: p } = cookieWarn;
+            setCookieWarn(null);
+            void runParse(a, u, p); // 跳过预热，照常解析
+          }}
+          onConfirm={() => {
+            const { adapter: a, url: u, passcode: p } = cookieWarn;
+            setCookieWarn(null);
+            primeCookieTab(u); // 新标签预热（解析并行进行）
+            void runParse(a, u, p);
+          }}
         />
       )}
     </>

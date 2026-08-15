@@ -36,15 +36,15 @@ const PC_QUERY = 'pr=UCBrowser&fr=pc';
 const DL_QUERY = 'entry=ft&fr=pc&pr=UCBrowser';
 
 /**
- * UC 网盘特性表（偏好设置 UAC 表数据源，与 reverse-notes §3 一致）：
- * - 游客可直接解析+下载（4G 以下实测通过），无需转存/登录/读 cookie
- * - 直链可加速（UC 不限速）；23018 超限临界值未知，标注"临界未知"
+ * UC 网盘特性表（偏好设置 UAC 表数据源，与 reverse-notes §3/§10 一致）：
+ * - 游客可直接解析；下载层需要 __pugs 人机校验 cookie（游客态即可，§10.1）
+ * - 直链可加速（UC 不限速）；23018 超限临界值未知，标注“临界未知”
  */
 const UC_LIMITS: PanLimits = {
   needsTransfer: false,
   needsLogin: false,
   canRemoveSpeedLimit: true,
-  needsCookie: false,
+  needsCookie: true, // 下载层需要 __pugs（§10：游客态 cookie，非登录态）
   noLoginNeeded: true,
   batchOnlyAriaGopeed: false,
   sizeLimitNote: '4G 文件都不需要，临界未知',

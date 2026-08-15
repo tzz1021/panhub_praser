@@ -12,6 +12,7 @@
  */
 
 import type { ExportFile, TaskOptions } from '../core/types';
+import { getPugs } from '../core/pugs';
 
 /** UC 客户端 UA（reverse-notes-uc.md §5 实测组合） */
 export const UC_DOWNLOAD_UA =
@@ -35,11 +36,15 @@ function shellEscape(s: string): string {
 
 /**
  * 生成单文件 cURL 命令：
- *   curl -L -C - -o "<outDir>/<文件名>" -A "<UC UA>" -e "https://drive.uc.cn/" "<直链>"
+ *   curl -L -C - -o "<outDir>/<文件名>" -A "<UC UA>" -e "https://drive.uc.cn/" [-b "__pugs=..."] "<直链>"
+ * __pugs 由解析时的代理捕获自动入库（§10.2）；缺失时命令附带提示注释。
  */
 export function generateCurlCommand(file: ExportFile, options?: Pick<TaskOptions, 'outDir'>): string {
   const name = fileNameOf(file.path);
   // 输出路径 = outDir + 文件名；含双引号统一转义
   const outPath = shellEscape(options?.outDir ? `${options.outDir}/${name}` : name);
-  return `curl -L -C - -o "${outPath}" -A "${UC_DOWNLOAD_UA}" -e "${UC_DOWNLOAD_REFERER}" "${file.url}"`;
+  const pugs = getPugs();
+  const cookiePart = pugs ? ` -b "__pugs=${pugs}"` : '';
+  const hint = pugs ? '' : '\n# 提示：未捕获 __pugs（下载令牌），UC 下载可能被拒（403/掐流）。点击解析并允许弹窗后重新导出。';
+  return `curl -L -C - -o "${outPath}" -A "${UC_DOWNLOAD_UA}" -e "${UC_DOWNLOAD_REFERER}"${cookiePart} "${file.url}"${hint}`;
 }

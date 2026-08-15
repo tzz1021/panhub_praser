@@ -68,7 +68,7 @@ export interface LinkFetchOptions {
 
 /** 弹窗开关（HANDOFF 附件 UAC 表底部全局行） */
 export interface ModalPrefs {
-  /** 读取 cookie 警告弹窗（v1 UC 零 cookie，默认关；接入需 cookie 的网盘再开） */
+  /** 读取 cookie 警告弹窗（§10：下载层需 __pugs 游客态 cookie，解析时弹窗预热；默认开，可关） */
   cookieWarn: boolean;
   /** 需要登录 → 跳转提示弹窗 */
   loginJump: boolean;

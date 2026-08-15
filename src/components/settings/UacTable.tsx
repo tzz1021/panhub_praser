@@ -53,7 +53,7 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
   };
 
   const modalRows: Array<{ key: keyof ModalPrefs; label: string; sub?: string }> = [
-    { key: 'cookieWarn', label: '读取 Cookie 警告弹窗', sub: '接入需要 Cookie 的网盘时生效（UC 零 Cookie）' },
+    { key: 'cookieWarn', label: '读取 Cookie 警告弹窗', sub: '解析时弹窗并新标签预热下载令牌（UC 需 __pugs，游客态即可）' },
     { key: 'loginJump', label: '需要登录但未登录/过期 → 跳转提示弹窗' },
     { key: 'autoCloseTab', label: '自动关闭新标签页', sub: '只能关闭本站打开的标签' },
     { key: 'corsAutoJump', label: 'CORS 拦截后自动跳转', sub: '备用形式：跳分享页供书签解析，退出本站自动清理；默认关=先弹窗' },
