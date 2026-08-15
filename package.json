@@ -1,0 +1,24 @@
+{
+  "name": "panhub_praser",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "云链解析站：网盘分享链接 → 目录树 → 批量直链 → aria2/gopeed/curl 导出。零上传、无后端、GPLv3。",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1"
+  }
+}

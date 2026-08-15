@@ -1,0 +1,299 @@
+/**
+ * core 层共享契约（docs/STRUCTURE.md：src/core/types.ts）
+ *
+ * 定位：treeWalker / linkFetcher / preferences / footprint / tasks 之间的唯一共享类型源。
+ * 约束：core/ 零网盘依赖 —— 只引用 adapters/types.ts 的抽象类型（ShareFile/PanAdapter 接口），
+ * 不 import 任何具体适配器（如 uc.ts）。
+ *
+ * 命名：camelCase 字段；kebab-case 文件名。
+ */
+
+import type { PanAdapter, ShareFile, Stoken } from '../adapters/types';
+
+/* ============================== 目录树 ============================== */
+
+/** 目录树节点（treeWalker 产物；tasks/export/footprint/UI 共用） */
+export interface TreeNode {
+  /** 网盘条目（fid/fileName/dir/size/标识符等） */
+  file: ShareFile;
+  /** 相对分享根目录的路径（含文件名），如 "dir1/sub/file.zip"；根节点为 "/" */
+  path: string;
+  /** 目录深度（根 = 0） */
+  depth: number;
+  /** 大小：文件 = 自身 size；目录 = 子树递归聚合 */
+  size: number;
+  /** 子节点（仅目录有） */
+  children?: TreeNode[];
+}
+
+/** 目录遍历配置（treeWalker） */
+export interface TreeWalkOptions {
+  /** 是否遍历子目录；false 只列根层（默认 true） */
+  recursive?: boolean;
+  /** 最大深度（根 = 0；默认 0 = 不限） */
+  maxDepth?: number;
+  /** 并发列表请求数（默认 3，防风控） */
+  concurrency?: number;
+  /** 是否聚合目录大小（默认 true；关掉可省子目录遍历） */
+  aggregateSize?: boolean;
+  /** 进度回调：每完成一个节点触发（done/total 为已完成/预估节点数） */
+  onProgress?: (done: number, total: number, current: TreeNode) => void;
+}
+
+/* ============================== 批量直链 ============================== */
+
+/** 单条直链获取结果（linkFetcher 产物） */
+export interface LinkResult {
+  /** 对应网盘条目 */
+  file: ShareFile;
+  /** 直链（ok = false 时为空字符串） */
+  url: string;
+  /** 成功与否 */
+  ok: boolean;
+  /** 失败原因（ok = false 时给出中文文案） */
+  error?: string;
+}
+
+/** 批量直链获取配置（linkFetcher；节流参数参考 LinkSwift：15 个/批 + 1s） */
+export interface LinkFetchOptions {
+  /** 每批文件数（默认 15） */
+  batchSize?: number;
+  /** 批间间隔 ms（默认 1000） */
+  batchIntervalMs?: number;
+  /** 失败时是否继续后续批次（默认 true） */
+  continueOnError?: boolean;
+}
+
+/* ============================== 偏好设置 ============================== */
+
+/** 弹窗开关（HANDOFF 附件 UAC 表底部全局行） */
+export interface ModalPrefs {
+  /** 读取 cookie 警告弹窗（v1 UC 零 cookie，默认关；接入需 cookie 的网盘再开） */
+  cookieWarn: boolean;
+  /** 需要登录 → 跳转提示弹窗 */
+  loginJump: boolean;
+  /** 自动关闭新标签页（只能关自己打开的标签，见 HANDOFF §7） */
+  autoCloseTab: boolean;
+  /** 批量解析"仅支持 aria2/gopeed"弹窗 */
+  batchWarn: boolean;
+  /** 反复点击"批量解析"提示弹窗 */
+  repeatClickWarn: boolean;
+  /** CORS 拦截后是否自动跳转分享页（1.0.3：备用形式，默认关；开=自动跳分享页，退出本站自动清理新标签） */
+  corsAutoJump: boolean;
+}
+
+/** 足迹偏好（仅本地，IndexedDB） */
+export interface FootprintPrefs {
+  /** 已填入链接查重/历史 */
+  keepLinks: boolean;
+  /** 自动获取的目录树快照 */
+  keepTrees: boolean;
+  /** 解析记录是否在目录树呈现（斜体） */
+  recordInTree: boolean;
+  /** 完整解析日志 */
+  keepLogs: boolean;
+  /** 日志等级：fatal/info/debug（默认 debug） */
+  logLevel: 'fatal' | 'info' | 'debug';
+  /** 链接/树快照保留条数（默认 100） */
+  linkLimit: number;
+  /** 日志最大体积 MB（默认 5） */
+  logMaxMB: number;
+}
+
+/** 目录树详细程度（附件：全部默认 ✅，仅渲染网盘支持字段） */
+export interface TreeDetailPrefs {
+  /** file 大小 */
+  fileSize: boolean;
+  /** etag（md5/sha1） */
+  etag: boolean;
+  /** 分享时间 */
+  shareTime: boolean;
+  /** 用户存储时间 */
+  saveTime: boolean;
+  /** 平台存储时间（部分网盘支持） */
+  platformTime: boolean;
+}
+
+/** 解析通道配置（1.1）：direct 直连（CORS 受限）| proxy 代理转发（填地址后可用） */
+export interface TransportPrefs {
+  /** 解析通道：'direct' 浏览器直连 | 'proxy' 用户自填代理转发 */
+  mode: 'direct' | 'proxy';
+  /** API 转发代理地址（https://xxx.pages.dev 或自托管；空=不可用） */
+  proxyUrl: string;
+  /** 代理访问令牌（部署时配置的 PROXY_TOKEN；代理未设 token 时可留空） */
+  proxyToken: string;
+}
+
+/** 偏好设置（core/preferences.ts，localStorage；默认值见 HANDOFF 附件 §2/§3） */
+export interface Preferences {
+  /** 单个文件默认方式：'parse' 解析展示直链 | 'download' 按默认方式直接下载 */
+  singleFileMode: 'parse' | 'download';
+  /** 同目录批量默认方式（'download' 时逐个按单文件方式处理） */
+  sameDirMode: 'parse' | 'download';
+  /** 跨目录：是否保留原始目录结构（仅 aria2/gopeed） */
+  keepStructure: boolean;
+  /** 跨目录：扫描深度（0 = 不限） */
+  scanDepth: number;
+  /** 显示文件夹大小 */
+  showDirSize: boolean;
+  /** 确认解析弹窗（默认开） */
+  confirmParse: boolean;
+  /** 显示每个 file 的下载器 ETA 跟踪 */
+  trackEta: boolean;
+  /** 显示目录树 */
+  showTree: boolean;
+  /** 目录树格式：'bars' |--- 模式（默认）| 'indent' 缩进模式 */
+  treeFormat: 'bars' | 'indent';
+  /** 目录树详细程度 */
+  treeDetail: TreeDetailPrefs;
+  /** 弹窗开关 */
+  modals: ModalPrefs;
+  /** 解析通道（1.1） */
+  transport: TransportPrefs;
+  /** 足迹偏好 */
+  footprint: FootprintPrefs;
+}
+
+/* ============================== 足迹记录 ============================== */
+
+/** 足迹：已填链接（明文存储 + 时间，用于查重/历史；默认保留最近 100 条） */
+export interface LinkRecord {
+  /** 分享链接（主键） */
+  url: string;
+  /** 识别到的适配器 id（如 "uc"） */
+  adapterId: string;
+  /** 分享 ID */
+  shareId: string;
+  /** 首次填入时间 ms */
+  addedAt: number;
+  /** 最近使用时间 ms */
+  lastUsedAt: number;
+  /** 使用次数 */
+  useCount: number;
+  /** 用户备注（1.0.1 历史页可编辑；可选） */
+  note?: string;
+}
+
+/** 足迹：目录树快照（md 导出用） */
+export interface TreeSnapshot {
+  /** 分享 ID（主键） */
+  shareId: string;
+  /** 分享链接 */
+  url: string;
+  /** 适配器 id */
+  adapterId: string;
+  /** 序列化目录树（根节点） */
+  root: TreeNode;
+  /** 快照时间 ms */
+  savedAt: number;
+  /** 文件总数 */
+  fileCount: number;
+  /** 总大小字节 */
+  totalSize: number;
+}
+
+/** 足迹：解析记录（在目录树呈现：时间/次数/是否成功，默认斜体） */
+export interface ParseRecord {
+  /** 自增主键（写入时由 DB 生成） */
+  id?: number;
+  /** 分享 ID（查询用） */
+  shareId: string;
+  /** 分享链接 */
+  url: string;
+  /** 适配器 id */
+  adapterId: string;
+  /** 解析时间 ms */
+  parsedAt: number;
+  /** 是否成功 */
+  ok: boolean;
+  /** 成功解析的文件数 */
+  fileCount: number;
+  /** 失败原因（ok = false 时） */
+  error?: string;
+  /** 分享内容标题（1.0.2：解析时记录首个文件（夹）名，历史页展示用，不显示裸 URL） */
+  title?: string;
+}
+
+/** 足迹：解析日志条目（日志单独存储；cookie 写入前必须脱敏） */
+export interface LogEntry {
+  /** 自增主键（写入时由 DB 生成） */
+  id?: number;
+  /** 时间 ms */
+  time: number;
+  /** 等级 */
+  level: 'fatal' | 'info' | 'debug';
+  /** 适配器 id */
+  adapterId: string;
+  /** 分享链接 */
+  url: string;
+  /** 日志内容（已脱敏，禁止明文 cookie） */
+  message: string;
+}
+
+/* ============================== 任务导出 ============================== */
+
+/** 导出入参：拍平的 {路径, 直链} 列表（tasks/export.ts 统一入口） */
+export interface ExportFile {
+  /** 相对路径（含文件名）；keepStructure = false 时仅文件名 */
+  path: string;
+  /** OSS 签名直链（字符敏感，原样透传） */
+  url: string;
+  /** 大小（字节，可选） */
+  size?: number;
+}
+
+/** 导出任务类型 */
+export type TaskKind = 'aria2' | 'gopeed' | 'curl';
+
+/** 任务生成配置（tasks/*.ts） */
+export interface TaskOptions {
+  /** 保留原始目录结构（仅 aria2/gopeed 支持） */
+  keepStructure: boolean;
+  /** 下载目录（绝对路径，用于 aria2/curl 的 -d/输出路径） */
+  outDir?: string;
+}
+
+/* ============================== 树遍历入参 ============================== */
+
+/** 树遍历入口参数（token 三连之后的上下文） */
+export interface TreeContext {
+  /** 适配器（调用方从 registry 取，保证 core 零网盘 import） */
+  adapter: import('../adapters/types').PanAdapter;
+  /** 分享 ID */
+  shareId: string;
+  /** 分享访问令牌 */
+  stoken: Stoken;
+}
+
+/* ============================== 直链获取入参 ============================== */
+
+/** 批量直链获取入口参数 */
+export interface LinkFetchContext {
+  /** 适配器 */
+  adapter: import('../adapters/types').PanAdapter;
+  /** 分享 ID */
+  shareId: string;
+  /** 分享访问令牌 */
+  stoken: Stoken;
+}
+
+/* ============================== UI 会话 ============================== */
+
+/**
+ * 一次解析的完整上下文（HomePage 产出 → ResultPage 消费）
+ * 仅引用 PanAdapter 抽象接口，不依赖具体网盘。
+ */
+export interface ParseSession {
+  /** 识别到的适配器（registry 分发） */
+  adapter: PanAdapter;
+  /** 用户输入的分享链接 */
+  url: string;
+  /** 分享 ID */
+  shareId: string;
+  /** 分享访问令牌 */
+  stoken: string;
+  /** 目录树（buildTree 产物） */
+  root: TreeNode;
+  /** 解析完成时间 ms */
+  parsedAt: number;
+}

@@ -1,0 +1,165 @@
+/**
+ * 分享链接输入区（docs/STRUCTURE.md：src/components/LinkInput.tsx）
+ *
+ * 输入 + 自动识别网盘 + 历史下拉 + 提取码提取：
+ * - 支持粘贴"整段分享文案"：自动提取 URL 与提取码（pdpb.cn 同款）
+ * - detect 命中 → 回调高亮网盘种类；未命中 → "识别失败，请检查格式是否正确"
+ */
+import { useEffect, useRef, useState } from 'react';
+import type { JSX } from 'react';
+import type { PanAdapter } from '../adapters/types';
+import { detectShareUrl } from '../adapters/registry';
+import { listLinks } from '../core/footprint/links';
+import { useToast } from './Toast';
+
+/** 从分享文案中提取 URL 与提取码 */
+export function extractShare(text: string): { url: string; passcode?: string } {
+  const urlMatch = text.match(/https?:\/\/[^\s"'<>，。；、]+/);
+  const url = urlMatch ? urlMatch[0] : text.trim();
+  const pc =
+    text.match(/提取码[：:]\s*([A-Za-z0-9]{4,8})/)?.[1] ??
+    text.match(/密码[：:]\s*([A-Za-z0-9]{4,8})/)?.[1];
+  return { url, passcode: pc };
+}
+
+export interface LinkInputProps {
+  /** URL 变化回调（含识别结果；detect 失败时 adapter 为 null） */
+  onDetect: (adapter: PanAdapter | null, url: string) => void;
+  /** 提取码变化回调（粘贴文案自动提取时触发） */
+  onPasscode?: (passcode: string) => void;
+  /** 主按钮点击（二次校验 + 解析由父级负责） */
+  onFetchFiles: () => void;
+  /** 次按钮点击（连接本地下载器） */
+  onOpenDownloader: () => void;
+  /** 解析中（禁用输入与按钮） */
+  busy: boolean;
+  /** 识别失败提示（父级决定文案，默认 "识别失败，请检查格式是否正确"） */
+  detectFailText?: string;
+  /** 外部预填链接（1.0.1 历史页"重新解析"；变化时触发一次） */
+  initialValue?: string;
+}
+
+export function LinkInput({
+  onDetect,
+  onPasscode,
+  onFetchFiles,
+  onOpenDownloader,
+  busy,
+  detectFailText = '识别失败，请检查格式是否正确',
+  initialValue,
+}: LinkInputProps): JSX.Element {
+  const [url, setUrl] = useState('');
+  const [passcode, setPasscode] = useState('');
+  const [history, setHistory] = useState<string[]>([]);
+  const [detectMsg, setDetectMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const { toast } = useToast();
+  const prevUrl = useRef('');
+  const appliedInitial = useRef<string | null>(null);
+
+  // 外部预填（历史页"重新解析"）：值变化时填充并触发一次识别
+  useEffect(() => {
+    if (initialValue && initialValue !== appliedInitial.current) {
+      appliedInitial.current = initialValue;
+      setUrl(initialValue);
+      prevUrl.current = initialValue;
+      const adapter = detectShareUrl(initialValue);
+      if (adapter) {
+        setDetectMsg({ ok: true, text: `已识别：${adapter.name}` });
+        onDetect(adapter, initialValue);
+      } else {
+        setDetectMsg({ ok: false, text: detectFailText });
+        onDetect(null, initialValue);
+      }
+    }
+  }, [initialValue, onDetect, detectFailText]);
+
+  // 加载历史（足迹：已填链接）
+  useEffect(() => {
+    void listLinks(100).then((links) => setHistory(links.map((l) => l.url)));
+  }, []);
+
+  /** 输入/粘贴统一处理：提取 → 识别 → 高亮 */
+  const handleChange = (raw: string): void => {
+    const { url: extracted, passcode: pc } = extractShare(raw);
+    setUrl(extracted);
+    if (pc && !passcode) {
+      setPasscode(pc);
+      onPasscode?.(pc);
+    }
+    if (extracted === prevUrl.current) return;
+    prevUrl.current = extracted;
+    if (!extracted) {
+      setDetectMsg(null);
+      onDetect(null, '');
+      return;
+    }
+    const adapter = detectShareUrl(extracted);
+    if (adapter) {
+      setDetectMsg({ ok: true, text: `已识别：${adapter.name}` });
+      onDetect(adapter, extracted);
+    } else {
+      setDetectMsg({ ok: false, text: detectFailText });
+      onDetect(null, extracted);
+    }
+  };
+
+  const submit = (): void => {
+    if (!url.trim()) {
+      toast('请先粘贴分享链接', 'error');
+      return;
+    }
+    onFetchFiles();
+  };
+
+  return (
+    <div className="card">
+      <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="input-row">
+          <input
+            className="input"
+            list="panhub-history"
+            placeholder="粘贴 UC 分享链接或整段分享文案，如 https://drive.uc.cn/s/xxxx"
+            value={url}
+            onChange={(e) => handleChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit();
+            }}
+            disabled={busy}
+            autoFocus
+          />
+          <datalist id="panhub-history">
+            {history.map((h) => (
+              <option key={h} value={h} />
+            ))}
+          </datalist>
+          <input
+            className="input input-passcode"
+            placeholder="提取码（可选）"
+            value={passcode}
+            onChange={(e) => {
+              setPasscode(e.target.value);
+              onPasscode?.(e.target.value);
+            }}
+            disabled={busy}
+          />
+          <button type="button" className="btn btn-primary" onClick={submit} disabled={busy}>
+            {busy ? '解析中…' : '获取文件列表'}
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={onOpenDownloader} disabled={busy}>
+            连接本地下载器
+          </button>
+        </div>
+        <div className="detect-hint">
+          {detectMsg ? (
+            <>
+              <span className={detectMsg.ok ? 'ok' : 'bad'}>{detectMsg.ok ? '✓' : '✗'}</span>
+              {detectMsg.text}
+            </>
+          ) : (
+            <span>粘贴链接后自动识别网盘种类</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

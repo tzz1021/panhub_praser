@@ -1,0 +1,20 @@
+# panhub_praser —— 独立 .gitignore
+# 构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 本地调试产物
+.vite/
+wrangler.toml.local
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# 日志与临时文件
+*.log
+*.tmp
