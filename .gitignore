@@ -1,4 +1,4 @@
-# panhub_praser —— 独立 .gitignore
+# panhub_praser —— 独立 .gitignore（pan-web 将来可单独成仓库推送）
 # 构建产物
 node_modules/
 dist/

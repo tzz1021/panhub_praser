@@ -13,7 +13,7 @@ import type { ModalPrefs, TransportPrefs } from '../../core/types';
 import { useToast } from '../Toast';
 import { getActiveTransport, setActiveTransport, transportFromPrefs } from '../../core/transport/types';
 import { ProxyTransport } from '../../core/transport/types';
-import { listLinks } from '../../core/footprint/links';
+import { listAllRecords } from '../../core/footprint/records';
 
 /** 开关 */
 export function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label?: string }): JSX.Element {
@@ -165,15 +165,16 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
                 toast('请先填写代理地址', 'error');
                 return;
               }
-              // 真实链路测试：取历史最近一次解析的链接，经代理走 UC token 接口（首环即全链路）
-              const links = await listLinks(1).catch(() => []);
-              const link = links[0];
-              if (!link) {
+              // 真实链路测试：取历史最近一次解析记录（含失败），经代理走 token 接口（首环即全链路）
+              // 注意：失败解析只写 ParseRecord（records store），不写 LinkRecord（links store），故不能用 listLinks
+              const records = await listAllRecords(1).catch(() => []);
+              const rec = records[0];
+              if (!rec) {
                 toast('历史记录为空，请先解析一条链接再来测试', 'error');
                 return;
               }
-              const adapter = getAdapterById(link.adapterId);
-              const shareId = adapter?.parseShareId(link.url);
+              const adapter = getAdapterById(rec.adapterId);
+              const shareId = rec.shareId || adapter?.parseShareId(rec.url);
               if (!adapter || !shareId) {
                 toast('历史链接已无法识别，请重新解析', 'error');
                 return;

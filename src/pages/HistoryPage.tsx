@@ -89,6 +89,8 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
   const [editingNote, setEditingNote] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [loaded, setLoaded] = useState(false);
+  /** view raw：正在查看原始 JSON 的链接（null=未打开） */
+  const [raw, setRaw] = useState<{ title: string; json: string } | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -161,8 +163,90 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
     toast(`已导出 ${payload.length} 条历史链接`, 'success');
   };
 
+  /** view raw：拉取该链接的全部原始足迹（records/link/tree/logs）并序列化展示（1.1） */
+  const viewRaw = async (g: TimelineGroup): Promise<void> => {
+    try {
+      const [links, trees, logs] = await Promise.all([listLinks(500), listTrees(500), listLogs(500)]);
+      const payload = {
+        url: g.url,
+        adapterId: g.adapterId,
+        shareId: g.shareId,
+        records: g.records,
+        link: links.find((l) => l.url === g.url) ?? null,
+        tree: trees.find((t) => t.shareId === g.shareId) ?? null,
+        logs: logs.filter((l) => l.url === g.url),
+      };
+      setRaw({ title: g.title, json: JSON.stringify(payload, null, 2) });
+    } catch {
+      toast('原始数据读取失败', 'error');
+    }
+  };
+
+  const copyRaw = async (): Promise<void> => {
+    if (!raw) return;
+    try {
+      await navigator.clipboard.writeText(raw.json);
+      toast('已复制原始 JSON', 'success');
+    } catch {
+      toast('复制失败（浏览器未授权剪贴板）', 'error');
+    }
+  };
+
+  const downloadRaw = (): void => {
+    if (!raw) return;
+    const safeName = raw.title.replace(/[\\/:*?"<>|]/g, '_').slice(0, 40) || 'record';
+    downloadFile(`panhub-praser-raw-${safeName}.json`, raw.json);
+  };
+
   return (
     <>
+      {raw && (
+        <div className="modal-mask" onClick={() => setRaw(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760 }}>
+            <div className="modal-head">
+              <h3 className="modal-title">原始数据 · {raw.title}</h3>
+              <button type="button" className="modal-close" onClick={() => setRaw(null)} aria-label="关闭">
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => void copyRaw()}>
+                  复制 JSON
+                </button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={downloadRaw}>
+                  下载 .json
+                </button>
+                <span className="field-hint" style={{ marginLeft: 'auto', alignSelf: 'center' }}>
+                  图形化时间轴背后的原始存储（records / link / tree / logs，仅本地）
+                </span>
+              </div>
+              <pre
+                style={{
+                  maxHeight: '50vh',
+                  overflow: 'auto',
+                  margin: 0,
+                  padding: 10,
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  background: 'var(--bg-code, rgba(0,0,0,0.06))',
+                  borderRadius: 6,
+                  border: '1px solid var(--border)',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-all',
+                }}
+              >
+                {raw.json}
+              </pre>
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="btn btn-primary" onClick={() => setRaw(null)}>
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="card">
         <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="history-head">
@@ -285,6 +369,9 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
                         </button>
                         <button type="button" className="btn btn-ghost btn-sm" onClick={() => void downloadLog(g)}>
                           下载日志
+                        </button>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void viewRaw(g)}>
+                          原始数据
                         </button>
                         <button
                           type="button"
