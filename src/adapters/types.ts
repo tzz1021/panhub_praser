@@ -145,6 +145,11 @@ export interface PanAdapter {
   detect(url: string): boolean;
   /** 下载层 cookie 规格（UC 需要 __pugs；无 = 不需要 cookie） */
   readonly cookie?: CookieRequirement;
+  /**
+   * 历史“再次解析”复用窗口（小时，取决于云服务商过期时间；缺省/0 = 不复用）。
+   * 窗口内再次解析直接复用本地树快照（含 stoken），不请求代理（避免刷转发次数）。
+   */
+  readonly reuseWindowHours?: number;
   /** 从分享链接提取分享 ID；无法识别返回 null */
   parseShareId(url: string): ShareId | null;
   /** 获取分享访问令牌（token 三连第一步） */

@@ -346,3 +346,16 @@ drive.uc.cn 或空 referer（§10.1.4）；pdpb 等同类解析站同样不支�
 - [ ] 设置备份/恢复（localStorage 导出导入）
 - [ ] RPC 高级功能（aria2.addUri 直推等）
 - [ ] 真实 CF 部署验证 __pugs 下发 + IP/UA 绑定（reserve-note §2.2-3）
+
+### 12.6 回溯复用 + 首屏传输初始化（v1.1.4，Tzz 反馈）
+
+- **回溯功能**：历史“再次解析”在适配器 `reuseWindowHours` 窗口内（UC = 6h，取决于
+  云服务商过期时间）且快照带 stoken → 直接复用本地快照进结果页：不请求代理、无弹窗。
+  TreeSnapshot 增加 stoken 字段；旧快照无 stoken 则不可复用，回退正常重新解析。
+- **首屏 CORS 弹窗修复**：此前 `setActiveTransport` 只在设置面板调用，启动默认 direct，
+  每次获取资源列表都弹 CORS，进设置点“保存”才生效。现于 main.tsx 启动时
+  `setActiveTransport(transportFromPrefs(getPreferences().transport))` 初始化。
+- **CF 链路实测确认（2026-08-16 线上）**：live-proxy-check.mjs 经线上代理
+  （5775fa15.panhub-praser.pages.dev）全链路通过：download 200 + x-pugs 回传（208 字符）
+  + 同响应 pugs 下载 OSS 200。此前 v1.1.2 弹窗空值 = 部署旧版 proxy.js（缓存/时序问题），
+  非 CF 能力问题。诊断日志已加进 proxy.js（定位后删除）。
