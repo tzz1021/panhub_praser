@@ -27,6 +27,10 @@ export interface DirectoryTreeProps {
   onToggleDir: (fid: string) => void;
   onToggleFile: (fid: string) => void;
   onToggleDirAll: (node: TreeNode) => void;
+  /** 单文件解析（§12：原“复制直链”位置改解析按钮）；缺省不显示 */
+  onParseFile?: (fid: string) => void;
+  /** 解析进行中（禁用按钮，防连点） */
+  busy?: boolean;
 }
 
 export function DirectoryTree({
@@ -36,6 +40,8 @@ export function DirectoryTree({
   onToggleDir,
   onToggleFile,
   onToggleDirAll,
+  onParseFile,
+  busy,
 }: DirectoryTreeProps): JSX.Element {
   if (rows.length === 0) {
     return (
@@ -95,9 +101,21 @@ export function DirectoryTree({
                     </span>
                   )}
                   {!isDir && link && !link.ok && (
-                    <span className="field-hint" style={{ color: 'var(--danger)' }}>
+                    <span className="field-hint" style={{ color: 'var(--danger)', marginRight: 6 }}>
                       {link.url || '失败'}
                     </span>
+                  )}
+                  {/* §12 单文件解析：无直链（含失败）时提供解析/重试按钮 */}
+                  {!isDir && onParseFile && (!link || !link.ok) && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onParseFile(f.fid)}
+                      disabled={busy}
+                      title={link ? '重新解析该文件' : '解析该文件（需 cookie 的网盘会先弹窗）'}
+                    >
+                      {link ? '重试' : '解析'}
+                    </button>
                   )}
                 </td>
               </tr>

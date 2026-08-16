@@ -5,12 +5,35 @@
 
 ---
 
+## [v1.1.3] 2026-08-16 —— pugs 同响应绑定（架构级修复）+ 单文件解析 + CF 能力验证
+
+### 新增
+- 单文件解析：目录树操作列原“复制直链”位置改“解析”按钮（未解析/失败时显示；成功后提示用导出命令下载）
+- docs/reserve-note.md（预留笔记）：pugs 同响应绑定实测矩阵 / CF 代理能力验证 / 项目定位 / 方案评估
+- 代理跨域部署补 `Access-Control-Expose-Headers: x-pugs`（GitHub Pages SPA + pages.dev 代理时浏览器才能读到捕获值）
+
+### 修复
+- **架构级：__pugs 与直链同响应绑定**（实测：同环境跨请求混用也 403 ucidMd5 invalid）——
+  DownloadResult/LinkResult/ExportFile 增加 cookie 字段，curl/aria2/gopeed 导出按文件注入各自响应绑定的值；
+  废弃“全局单一 pugs 注入所有文件”（多批解析时只有最后一批能下）
+- **顺序固化**（single-link 示例日志核对）：获取资源列表（ls）= 游客态浏览，不再弹 cookie 提示；
+  cookie 状态弹窗移到结果页“获取下载链接”阶段（解析时才需要，且与直链同响应）
+- UacTable 回滚 v1.1.2 改名与全局日志改动（label 恢复“读取 Cookie 警告弹窗”，副标修正“UC 下载需 __pugs，默认开”）
+
+### 变更
+- CookieWarnModal：完整明文显示捕获值（不再截断）+ 复制按钮（社区开发者调试，开关默认开）
+- v1.1.2 “设置项改名”作废（见上 UacTable 回滚）；弹窗标题/文案保留 v1.1.2 版本
+- 移除“解析前新标签预热”调用（§12 实测：跳转取 cookie 对导出链路无意义；浏览器直下已移除）
+- reverse-notes-uc.md 追加 §12；changelog 前序条目相应修订
+
+---
+
 ## [v1.1.2] 2026-08-16 —— cookie 状态弹窗 + 全局日志 + 架构纠偏（Tzz 反馈）
 
 ### 新增
 - 全局日志（开发调试）：历史页十盘 banner 下方新增可展开 banner，明确标注“仅用于开发调试，不会过滤隐私信息”；记录服务启动/偏好变更/解析生命周期/代理测试 POST/导出 merger
 - cookie 弹窗改造：如实显示本次捕获值（`双下划线pugs=…` 或空），空值时给出供应商排查话术（cookie 存储限制/无痕/AdGuard），按钮【算了吧】【我已阅，继续】
-- 设置项改名：读取 Cookie 警告弹窗 → **cookie读取状态警告**（默认开），副标“跟踪本机状态，以免获取无效的长command”
+- ~~设置项改名：读取 Cookie 警告弹窗 → cookie读取状态警告（默认开）~~ → v1.1.3 已回滚改名，仅保留“默认开”
 
 ### 修复
 - **架构纠偏**：`pugs.ts` 从 core/ 移入 adapters 层（`src/adapters/ucPugs.ts`），transport 回归“零网盘依赖”；__pugs 捕获收口到 UC 适配器 request()

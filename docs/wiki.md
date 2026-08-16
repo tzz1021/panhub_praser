@@ -30,6 +30,8 @@ X-Proxy-Token: <部署时设置的令牌>        # 可选，代理端校验
 ```
 
 - 成功：原样透传上游状态码与 body（UC API 返回 `{"code":0,"data":...}`）+ `Access-Control-Allow-Origin: *`
+- 若上游响应携带下载凭据 Set-Cookie（UC `__pugs`），代理会提取并回传 `x-pugs` 响应头
+  （跨域部署已配 `Access-Control-Expose-Headers: x-pugs`，浏览器可读）—— 该值与直链同响应绑定（docs/reserve-note.md §1）
 - 代理自身错误：`401`（令牌无效）/ `403`（域名不在白名单）/ `429`（限频）/ `502`（上游失败）等，body 为 `{"error":"CODE","message":"..."}`
 - 只转发 API JSON，**不转发文件流** —— 直链是 OSS 签名 URL，浏览器直接连 CDN 下载
 

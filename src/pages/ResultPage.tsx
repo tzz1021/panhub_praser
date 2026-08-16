@@ -11,6 +11,7 @@ import { DirectoryTree, collectLeaves, flattenTree } from '../components/Directo
 import type { TreeRow } from '../components/DirectoryTree';
 import { FileCheckbox } from '../components/FileCheckbox';
 import { BatchWarnModal } from '../components/BatchWarnModal';
+import { CookieWarnModal } from '../components/CookieWarnModal';
 import { DownloaderModal } from '../components/DownloaderModal';
 import { RepeatClickHint } from '../components/RepeatClickHint';
 import { useToast } from '../components/Toast';
@@ -19,6 +20,7 @@ import { getPreferences } from '../core/preferences';
 import { addRecord } from '../core/footprint/records';
 import { appendLog, listLogs, exportLogsMd } from '../core/footprint/logs';
 import { addGlobalLog } from '../core/footprint/globalLog';
+import { getPugs } from '../adapters/ucPugs';
 import { exportTask, exportTreeMd } from '../tasks/export';
 import { loadDownloaderConfig } from '../utils/downloader';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
@@ -31,6 +33,8 @@ interface LinkEntry {
   url: string;
   error?: string;
   fetchedAt: number;
+  /** 与该直链同响应绑定的下载凭据（§12；UC = __pugs），导出按文件注入 */
+  cookie?: { key: string; value: string };
 }
 
 /** 从 OSS 签名 URL 解析 Expires（秒时间戳） */
@@ -94,6 +98,9 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
   const [batchWarn, setBatchWarn] = useState<TaskKind | null>(null);
   const [repeatHint, setRepeatHint] = useState(false);
   const [downloaderOpen, setDownloaderOpen] = useState(false);
+  // §12 顺序固化：解析（获取下载链接）阶段才需要 cookie —— 弹窗确认后预热 + 继续
+  const [cookieWarn, setCookieWarn] = useState<{ files: ShareFile[] } | null>(null);
+  const pendingFetch = useRef<ShareFile[] | null>(null);
   const [, setTick] = useState(0); // 倒计时刷新
   const batchClickAt = useRef<number[]>([]);
 
@@ -171,11 +178,30 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
   };
 
   /* ---------- 批量直链 ---------- */
-  const handleFetchLinks = async (files: ShareFile[]): Promise<void> => {
+  /**
+   * 解析入口（§12 顺序固化：ls 不需要 cookie，解析才需要）：
+   * 需 cookie 的网盘（UC）→ 先弹窗展示捕获状态（明文，默认开），确认后拉直链。
+   * 不做“跳转取 cookie”预热 —— §12 实测：oss 直链与 __pugs 必须同响应绑定，
+   * 跨环境取值无意义（跳转只影响浏览器 jar，与导出链路无关）。
+   */
+  const requestFetchLinks = (files: ShareFile[]): void => {
     if (files.length === 0) {
       toast('请先勾选要解析的文件', 'error');
       return;
     }
+    if (fetching) return;
+    pendingFetch.current = files;
+    if (adapter.cookie && getPreferences().modals.cookieWarn) {
+      addGlobalLog('=====开始收集必要信息=====');
+      addGlobalLog(`获取cookie：弹窗已出现，等待用户选择（当前捕获 ${getPugs() ? '有值' : '为空'}，解析后代理捕获自动更新）`);
+      setCookieWarn({ files });
+      return;
+    }
+    void doFetchLinks(files);
+  };
+
+  /** 真正执行批量直链获取（每个下载响应下发的 __pugs 与该响应的直链绑定，§12） */
+  const doFetchLinks = async (files: ShareFile[]): Promise<void> => {
     // 反复点击提示（同 10s 内第 3 次点击）
     const now = Date.now();
     batchClickAt.current = batchClickAt.current.filter((t) => now - t < 10_000);
@@ -201,9 +227,18 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
           url: r.url,
           error: r.error,
           fetchedAt: Date.now(),
+          cookie: r.cookie, // §12：与该直链同响应的 __pugs
         });
       });
       setLinks((prev) => new Map([...(prev ?? []), ...map]));
+      // 捕获状态反馈（弹窗已展示过，这里给个结果）：
+      if (adapter.cookie) {
+        const withCookie = [...map.values()].filter((l) => l.ok && l.cookie).length;
+        addGlobalLog(`merger：下载凭据已按文件绑定（${withCookie}/${map.size} 个链接携带同响应 __pugs）`);
+        if (withCookie === 0) {
+          addGlobalLog('merger：未捕获到 __pugs —— 请检查代理通道（x-pugs 头）是否可用，否则导出命令将缺下载凭据');
+        }
+      }
       const abbr = linkAbbr(url, adapter.id);
       await addRecord({
         shareId,
@@ -242,7 +277,23 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
       const l = links?.get(f.fid);
       return !l || !l.ok;
     });
-    void handleFetchLinks(failed);
+    requestFetchLinks(failed);
+  };
+
+  /* ---------- 单文件解析（§12：原来“复制直链”的位置改成解析按钮） ---------- */
+  const parseSingleFile = (fid: string): void => {
+    const node = leafNodeOf(fid);
+    if (!node || node.file.dir) {
+      toast('仅支持解析文件', 'error');
+      return;
+    }
+    const existing = links?.get(fid);
+    if (existing?.ok && !fetching) {
+      // 已解析成功：直接提示可导出（避免重复请求）
+      toast('该文件已解析，勾选后可导出下载命令', 'info');
+      return;
+    }
+    requestFetchLinks([node.file]);
   };
 
   /* ---------- 导出（浏览器直连/复制直链已移除：UC referer 白名单拒绝第三方源，§10.1.4） ---------- */
@@ -253,10 +304,12 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
       .map((f) => {
         const node = leafNodeOf(f.fid);
         const path = node?.path ?? f.fileName;
+        const entry = links!.get(f.fid)!;
         return {
           path: keep ? path : path.split('/').pop() ?? f.fileName,
-          url: links!.get(f.fid)!.url,
+          url: entry.url,
           size: f.size,
+          cookie: entry.cookie, // §12：每文件与其直链同响应的 __pugs，merger 按文件注入
         };
       });
   };
@@ -344,7 +397,7 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              onClick={() => void handleFetchLinks(selectedFiles)}
+              onClick={() => requestFetchLinks(selectedFiles)}
               disabled={fetching}
             >
               {fetching ? `解析中 ${fetchProgress?.done ?? 0}/${fetchProgress?.total ?? 0}` : '批量获取下载链接'}
@@ -429,6 +482,8 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
             }
             onToggleFile={toggleFile}
             onToggleDirAll={toggleDirAll}
+            onParseFile={parseSingleFile}
+            busy={fetching}
           />
         </div>
       </div>
@@ -447,6 +502,23 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
       )}
       {repeatHint && <RepeatClickHint onClose={() => setRepeatHint(false)} />}
       {downloaderOpen && <DownloaderModal onClose={() => setDownloaderOpen(false)} />}
+      {cookieWarn && adapter.cookie && (
+        <CookieWarnModal
+          panName={adapter.name}
+          cookie={adapter.cookie}
+          capturedValue={getPugs() ?? ''}
+          onCancel={() => {
+            setCookieWarn(null);
+            addGlobalLog('获取cookie：用户选择“算了吧”（跳过展示，继续解析）');
+            void doFetchLinks(pendingFetch.current ?? []);
+          }}
+          onConfirm={() => {
+            setCookieWarn(null);
+            addGlobalLog('获取cookie：用户已确认，继续解析');
+            void doFetchLinks(pendingFetch.current ?? []);
+          }}
+        />
+      )}
     </>
   );
 }

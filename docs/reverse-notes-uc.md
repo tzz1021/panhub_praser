@@ -288,9 +288,61 @@ drive.uc.cn 或空 referer（§10.1.4）；pdpb 等同类解析站同样不支�
 - 原足迹日志保留（按链接归档 + 脱敏），两者分工：链接日志看单条链接行为，全局日志看系统状态。
 - 日志体量：单条 <1KB、100 条才 5MB 的现状说明记录过于稀疏 —— 放开写，环形 300 条足够。
 
-### 11.6 遗留待办（Tzz 列表，未实现）
+### 11.6 遗留待办（Tzz 列表）
 
-- [ ] 单文件解析（当前只有批量）
+- [x] 单文件解析（§12.4 已实现：目录树操作列“解析”按钮）
 - [ ] 设置备份/恢复（localStorage 导出导入）
 - [ ] RPC 高级功能（aria2.addUri 直推等，v1.1 已预留下载器配置）
 - [ ] 历史导出改为 records 数据源已修（v1.1.2）；单链接日志导出格式继续按 demo 打磨
+
+---
+
+## 12. 2026-08-16 追加：__pugs 与直链同响应绑定（实测复现）+ CF 能力验证 + 单文件解析
+
+> 追加人：小扳（Tzz 反馈 + 全组合实测，详见 docs/reserve-note.md）
+
+### 12.1 实测：pugs 绑定粒度是“响应级”，不是“环境级”
+
+四组合对照（真实分享 + OSS 直链探测，2026-08-16）：
+
+| 组合 | 结果 |
+|---|---|
+| 直链A + A响应 pugs | 200 ✅ |
+| 直链B + B响应 pugs（同环境相邻请求） | 200 ✅ |
+| **直链A + B响应 pugs（同环境跨请求）** | **403，379B XML：`Cdn auth fail: ucidMd5 invalid` ❌** |
+| 直链A + 本地直连 pugs（跨环境） | 403 ❌ |
+| 批量同响应 2 直链 + 同一 pugs | 双双 200 ✅ |
+
+- **推论**：批量 15/批时，每批一个 pugs；**导出必须按文件注入各自响应绑定的值**。
+  用全局单一值注入所有文件 → 只有最后一批能下。v1.1.2 之前就是这个 bug。
+- 因此“跳转页面取 cookie”对导出链路无意义（§11.1 已证 SPA 读不到 jar 值；
+  现在更证：即使拿到值也不是该直链响应下发的那个）。
+
+### 12.2 顺序固化（single-link 示例日志核对）
+
+- **ls（获取资源列表）= 游客态浏览，不需要 cookie**（normal browsing 同款逻辑，linkswift 已实现）。
+- **解析（request command）才需要 cookie**，且该 cookie 必须与“下载直链”同响应对应。
+- 已固化到 core：列表阶段不再弹 cookie 提示（HomePage 直接 runParse）；
+  cookie 状态弹窗移到结果页“获取下载链接”阶段（ResultPage requestFetchLinks）。
+
+### 12.3 CF 代理能力再验证（游客态 cookie 可传回）
+
+- download 接口响应带 `set-cookie: __pugs`（token/detail 只回 `__sdid`）；
+  本地模拟 Pages 运行时经 proxy.js 转发，`x-pugs` 回传成功。
+- **v1.1.2 部署版 pugs 为空的原因 = 部署的 proxy.js 是旧版（捕获代码当时未部署）**，
+  不是 CF 能力问题。跨域部署需 `Access-Control-Expose-Headers: x-pugs`（已补）。
+- 待真实部署验证：CF 边缘 IP 是否照常下发 pugs、是否绑 IP/UA（详见 reserve-note §2）。
+
+### 12.4 架构改造（v1.1.3）
+
+- `DownloadResult / LinkResult / ExportFile` 增加 `cookie`（同响应绑定，UC = __pugs）；
+  linkFetcher 透传；curl/aria2/gopeed 按文件注入各自 cookie；全局 getPugs 仅弹窗展示用。
+- 单文件解析：目录树操作列原“复制直链”位置改“解析”按钮（未解析/失败时显示，成功后提示用导出命令）。
+- UacTable 回滚至 v1.1.1 文案（label “读取 Cookie 警告弹窗”，副标修正为 “UC 下载需 __pugs，默认开”）。
+
+### 12.5 待办更新
+
+- [x] 单文件解析（12.4）
+- [ ] 设置备份/恢复（localStorage 导出导入）
+- [ ] RPC 高级功能（aria2.addUri 直推等）
+- [ ] 真实 CF 部署验证 __pugs 下发 + IP/UA 绑定（reserve-note §2.2-3）

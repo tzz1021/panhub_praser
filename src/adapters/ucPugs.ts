@@ -12,6 +12,12 @@
  * “新标签预热”把 __pugs 写进 .uc.cn 的 jar（§10.2 预热通道），两者互补。
  *
  * 有效期：Max-Age=10800（3 小时），过期后下次解析自动重新捕获覆盖。
+ *
+ * §12（2026-08-16 实测）：__pugs 与直链**同响应绑定** —— 某次 download
+ * 响应下发的 __pugs 只对该响应的 download_url 有效，跨响应/跨环境混用
+ * 一律 403（Cdn auth fail: ucidMd5 invalid）。因此导出命令不再读取本全局
+ * 值，而是用适配器绑定到每个 LinkResult 的 cookie（见 uc.ts getDownloadLinks）；
+ * 本全局值仅用于弹窗展示捕获状态与调试。
  */
 const STORAGE_KEY = 'pan-web:uc-pugs:v1';
 
@@ -36,10 +42,10 @@ export function setPugs(value: string | null | undefined): void {
   }
 }
 
-/** 从传输层响应头里捕获 x-pugs（若存在）并落库；返回是否捕获到 */
-export function capturePugsFromHeaders(headers: Record<string, string>): boolean {
+/** 从传输层响应头里捕获 x-pugs（若存在）并落库；返回捕获到的值（无则 null） */
+export function capturePugsFromHeaders(headers: Record<string, string>): string | null {
   const v = headers['x-pugs'];
-  if (!v) return false;
+  if (!v) return null;
   setPugs(v);
-  return true;
+  return v;
 }

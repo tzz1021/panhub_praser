@@ -44,6 +44,8 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'content-type, x-proxy-token',
+  // 跨域部署（如 SPA 在 GitHub Pages、代理在 pages.dev）时，浏览器需要显式放行才能读到 x-pugs
+  'Access-Control-Expose-Headers': 'x-pugs',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -87,10 +89,15 @@ function checkRateLimit(request) {
   return null;
 }
 
-/** 从 Set-Cookie 响应头里提取 __pugs 值（UC 下载鉴权唯一必需 cookie，§10.1） */
+/**
+ * 从 Set-Cookie 响应头里提取 __pugs 值（UC 下载鉴权唯一必需 cookie，§10.1/§12）。
+ * 兼容两种运行时：Workers 的 headers.get('set-cookie') 只回第一个值；
+ * Node/undici 会把多个 Set-Cookie 用 ", " 拼接 —— 这里按“__pugs= 出现在任意段”匹配。
+ */
 function extractPugs(setCookie) {
   if (!setCookie) return null;
-  const m = setCookie.match(/(?:^|,)\s*__pugs=([^;]*)/);
+  // 按逗号分段（cookie 值本身不含逗号/分号，安全）；也可直接用宽松正则兜底
+  const m = setCookie.match(/(?:^|,)\s*__pugs=([^;,\s]*)/);
   return m ? m[1] : null;
 }
 

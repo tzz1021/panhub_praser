@@ -3,14 +3,18 @@
  *
  * §10（reverse-notes-uc.md）：UC 下载层需要 __pugs 人机校验 cookie（游客态即可）。
  * 弹窗内容分两部分：
- *   1. 供应商专属（adapter.cookie 提供）：如实显示本次捕获到的 cookie 值，
- *      没有则提示排查（cookie 存储限制/无痕/AdGuard 拦截标签页）
+ *   1. 供应商专属（adapter.cookie 提供）：如实显示本次捕获到的 cookie 值（**完整明文**，
+ *      方便社区开发者调试/排查），没有则提示排查（cookie 存储限制/无痕/AdGuard 拦截标签页）
  *   2. 通用话术：详情参阅设置顶部 UAC 状况
  * 按钮：【算了吧】= 跳过预热继续解析；【我已阅，继续】= 新标签预热 + 继续解析。
- * 开关：设置 → 弹窗开关 → cookie读取状态警告（默认开，可关）。
+ * 开关：设置 → 弹窗开关 → 读取 Cookie 警告弹窗（默认开，可关）。
+ *
+ * 明文说明（2026-08-16）：该值只在本机展示/导出命令本地拼接，不会随请求上传；
+ * 显示完整值是为了社区开发者不用翻日志就能核对捕获结果（reverse-notes-uc.md §11.4）。
  */
 import type { JSX } from 'react';
 import type { CookieRequirement } from '../adapters/types';
+import { copyText } from '../utils/clipboard';
 
 export interface CookieWarnModalProps {
   /** 网盘名称（如 "UC 网盘"） */
@@ -27,7 +31,7 @@ export function CookieWarnModal({ panName, cookie, capturedValue, onConfirm, onC
   const hasValue = capturedValue.length > 0;
   return (
     <div className="modal-mask" onClick={onCancel}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
         <div className="modal-head">
           <h3 className="modal-title">cookie 读取状态</h3>
           <button type="button" className="modal-close" onClick={onCancel} aria-label="关闭">
@@ -39,10 +43,10 @@ export function CookieWarnModal({ panName, cookie, capturedValue, onConfirm, onC
             <strong>{panName}</strong> 需要 cookie 鉴权，下面是本次获取到的必要 cookie 值
             【如实显示{hasValue ? '' : '，没有'}】：
           </p>
-          <p
+          <div
             style={{
               margin: '8px 0',
-              padding: 8,
+              padding: '8px 10px',
               borderRadius: 6,
               background: hasValue ? 'rgba(40,167,69,0.08)' : 'rgba(220,53,69,0.08)',
               border: `1px solid ${hasValue ? 'rgba(40,167,69,0.35)' : 'rgba(220,53,69,0.35)'}`,
@@ -50,10 +54,31 @@ export function CookieWarnModal({ panName, cookie, capturedValue, onConfirm, onC
               fontSize: 12,
               wordBreak: 'break-all',
               color: 'var(--text)',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
             }}
           >
-            {cookie.displayName}={hasValue ? `${capturedValue.slice(0, 24)}…（${capturedValue.length} 字符）` : '（空）'}
-          </p>
+            <code style={{ flex: 1, whiteSpace: 'pre-wrap', userSelect: 'all' }}>
+              {cookie.displayName}={hasValue ? capturedValue : '（空）'}
+            </code>
+            {hasValue && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ flexShrink: 0, marginTop: -2 }}
+                title="复制完整 cookie 值（社区开发者调试用）"
+                onClick={() => void copyText(`${cookie.displayName}=${capturedValue}`)}
+              >
+                复制
+              </button>
+            )}
+          </div>
+          {hasValue && (
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-faint)' }}>
+              完整值 {capturedValue.length} 字符 · 与直链同响应绑定（§12），导出命令已按文件注入各自的值。
+            </p>
+          )}
           {!hasValue && (
             <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-faint)' }}>{cookie.missingHint}</p>
           )}

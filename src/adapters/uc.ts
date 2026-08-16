@@ -26,6 +26,14 @@ import type {
 import { getActiveTransport, TransportError, type TransportResponse } from '../core/transport/types';
 import { capturePugsFromHeaders } from './ucPugs';
 
+/**
+ * 最近一次 UC 响应的 __pugs（§12 同响应绑定）：
+ * 每次 getDownloadLinks 调用前重置，若该次响应用 x-pugs 回传了值，
+ * 则绑定到该次返回的每一个 DownloadResult；否则不带 cookie（导出时提示）。
+ * 注意：这是“响应级”绑定，不是全局令牌 —— 跨响应混用必然 403。
+ */
+let lastResponsePugs: string | null = null;
+
 /** UC 分享 ID 形如 https://drive.uc.cn/s/dd2ad2345e124 或 /share/xxx */
 const SHARE_URL_RE = /^https?:\/\/(?:[a-z0-9-]+\.)*uc\.cn\/(?:s|share)\/([A-Za-z0-9_-]+)/i;
 
@@ -115,8 +123,12 @@ async function request<T, M = unknown>(
     }
     throw err instanceof Error ? err : new Error(`网络请求失败（${step}）：${String(err)}`);
   }
-  // §10.2 代理捕获通道：UC 响应 Set-Cookie 下发的 __pugs 经代理回传为 x-pugs，在这里收口落库
-  capturePugsFromHeaders(res.headers);
+  // §10.2/§12 代理捕获通道：UC 响应 Set-Cookie 下发的 __pugs 经代理回传为 x-pugs；
+  // 这里收口落库（全局，供弹窗展示）并记录响应级值（供同响应绑定）
+  const pugs = capturePugsFromHeaders(res.headers);
+  if (pugs) {
+    lastResponsePugs = pugs;
+  }
   if (res.status === 401) {
     fail(401, '请检查请求参数完整性（entry 参数缺失或触发风控）');
   }
@@ -219,6 +231,8 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
   if (params.fids.length !== params.fidsTokens.length) {
     throw new Error('fids 与 fidsTokens 数量不一致（适配层调用错误）');
   }
+  // §12 同响应绑定：本次调用开始时重置，只有本次响应的 __pugs 才能配本次的直链
+  lastResponsePugs = null;
   const { data } = await request<
     Array<{ download_url?: string; file_name?: string; size?: number; md5?: string }>
   >(`${API_BASE}/file/download?${DL_QUERY}`, {
@@ -231,6 +245,8 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
       stoken: params.stoken,
     }),
   }, '获取下载直链');
+  // 同响应 pugs（无则不带 cookie，导出命令会附提示）
+  const cookie = lastResponsePugs ? { key: '__pugs' as const, value: lastResponsePugs } : undefined;
   return data.map((item) => {
     if (!item.download_url) {
       fail('no-download-url', '下载接口未返回直链，请重试');
@@ -240,6 +256,7 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
       fileName: item.file_name,
       size: item.size,
       md5: item.md5,
+      cookie, // §12：每文件携带与其直链同响应的 __pugs
     };
   });
 }

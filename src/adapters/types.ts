@@ -87,6 +87,12 @@ export interface DownloadResult {
   fileName?: string;
   size?: number;
   md5?: string;
+  /**
+   * 与该直链**同响应绑定**的下载凭据（§12 实测：跨响应/跨环境混用一律
+   * 403 ucidMd5 invalid）。UC = 本次 download 响应 Set-Cookie 下发的 __pugs。
+   * 缺省（响应未下发/直连拿不到）= 导出时该文件命令不注入 cookie 并附提示。
+   */
+  cookie?: { key: string; value: string };
 }
 
 /**

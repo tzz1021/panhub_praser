@@ -13,12 +13,10 @@ import { PanTable } from '../components/PanTable';
 import { DownloaderModal } from '../components/DownloaderModal';
 import { LoginJumpModal } from '../components/LoginJumpModal';
 import { CorsJumpModal } from '../components/CorsJumpModal';
-import { CookieWarnModal } from '../components/CookieWarnModal';
 import { useToast } from '../components/Toast';
 import { buildTree } from '../core/treeWalker';
 import { classifyError, isCorsError } from '../core/errors';
 import { getPreferences } from '../core/preferences';
-import { getPugs } from '../adapters/ucPugs';
 import { addGlobalLog } from '../core/footprint/globalLog';
 import { addLink } from '../core/footprint/links';
 import { saveTree } from '../core/footprint/trees';
@@ -50,8 +48,6 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
   const [downloaderOpen, setDownloaderOpen] = useState(false);
   const [loginJump, setLoginJump] = useState<{ message: string } | null>(null);
   const [corsJump, setCorsJump] = useState<{ message: string } | null>(null);
-  // §10：需 cookie 的网盘（UC）解析前弹窗，确认后新标签预热 __pugs
-  const [cookieWarn, setCookieWarn] = useState<{ adapter: PanAdapter; url: string; passcode: string } | null>(null);
   const { toast } = useToast();
   const [initialValue, setInitialValue] = useState('');
   const lastPending = useRef('');
@@ -114,53 +110,15 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       toast('识别失败，请检查格式是否正确', 'error');
       return;
     }
-    // §10：下载层需 cookie 的网盘（UC）→ 解析前弹窗；确认后新标签预热（解析并行不阻塞）
-    const prefs = getPreferences();
-    if (prefs.modals.cookieWarn && adapter.cookie) {
-      addGlobalLog('=====开始收集必要信息=====');
-      addGlobalLog('获取cookie：弹窗已出现，等待用户选择');
-      setCookieWarn({ adapter, url: shareUrl, passcode: pc });
-      return;
-    }
+    // §12/顺序固化：获取资源列表 = 游客态浏览（ls 不需要 cookie），直接解析目录树；
+    // cookie（UC __pugs）只在结果页“解析下载链接”阶段才需要（single-link 示例日志顺序）
+    addGlobalLog('=====获取资源列表已点击=====');
     await runParse(adapter, shareUrl, pc);
   };
 
   /**
-   * UC __pugs 新标签预热（reverse-notes-uc.md §10.2 预热通道）：
-   * window.open 分享页 → 页面 JS 自动触发 API → Set-Cookie 把 __pugs 写入浏览器 jar
-   * （Domain=uc.cn）→ 稍候自动关闭标签；退出本站（pagehide）兜底清理。
+   * 实际解析流程（获取文件列表：游客态请求，不需要 cookie，§12）
    */
-  const primeCookieTab = (shareUrl: string): void => {
-    const win = window.open(shareUrl, '_blank');
-    if (!win) {
-      toast('浏览器拦截了弹窗：下载时可能被 UC 拒绝（403），可手动打开一次分享页再下载', 'error');
-      addGlobalLog('获取cookie：浏览器拦截了弹窗（需手动放行）');
-      return;
-    }
-    const pugs = getPugs();
-    addGlobalLog(`获取cookie：开启标签页成功 ${shareUrl}`);
-    addGlobalLog(`获取cookie：${pugs ? `已获取必要值 __pugs=<已捕获 ${pugs.length} 字符> 已写入暂存区` : '暂存区暂无 __pugs（解析后代理捕获会自动写入）'}`);
-    // 给页面 JS 触发 API、Set-Cookie 落 jar 的时间（§10.4 待验证最佳时长）
-    const timer = window.setTimeout(() => {
-      try {
-        if (!win.closed) win.close();
-      } catch {
-        /* 跨域/已接管时忽略 */
-      }
-    }, 6000);
-    const cleanup = (): void => {
-      window.clearTimeout(timer);
-      try {
-        if (!win.closed) win.close();
-      } catch {
-        /* 忽略 */
-      }
-      window.removeEventListener('pagehide', cleanup);
-    };
-    window.addEventListener('pagehide', cleanup);
-  };
-
-  /** 实际解析流程（校验与弹窗分流后进入） */
   const runParse = async (adapter: PanAdapter, shareUrl: string, pc: string): Promise<void> => {
     const shareId = adapter.parseShareId(shareUrl);
     if (!shareId) {
@@ -297,26 +255,6 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
           message={corsJump.message}
           onClose={() => setCorsJump(null)}
           onOpenSettings={onOpenSettings}
-        />
-      )}
-      {cookieWarn && cookieWarn.adapter.cookie && (
-        <CookieWarnModal
-          panName={cookieWarn.adapter.name}
-          cookie={cookieWarn.adapter.cookie}
-          capturedValue={getPugs() ?? ''}
-          onCancel={() => {
-            const { adapter: a, url: u, passcode: p } = cookieWarn;
-            setCookieWarn(null);
-            addGlobalLog('获取cookie：用户选择“算了吧”（跳过预热，继续解析）');
-            void runParse(a, u, p); // 算了吧：跳过预热，照常解析
-          }}
-          onConfirm={() => {
-            const { adapter: a, url: u, passcode: p } = cookieWarn;
-            setCookieWarn(null);
-            addGlobalLog('获取cookie：用户已确认，开始新标签预热');
-            primeCookieTab(u); // 我已阅：新标签预热（解析并行进行）
-            void runParse(a, u, p);
-          }}
         />
       )}
     </>

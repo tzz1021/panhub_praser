@@ -51,6 +51,8 @@ functions/
 2. 目标域名白名单（默认只放行 `uc.cn`）→ 白名单外 `403`
 3. 每 IP 限频 60 次/分钟 → 超了 `429`
 4. 丢弃请求里的 `cookie` / `authorization`（凭据不落代理）→ 只留 content-type 等白名单头
+5. 捕获上游响应的下载凭据 Set-Cookie（UC `__pugs`）→ 回传 `x-pugs` 头供导出命令本地注入
+   （与直链同响应绑定，见 docs/reserve-note.md §1；跨域部署已配 `Access-Control-Expose-Headers: x-pugs`）
 5. 转发到网盘 API，**原样透传**状态码与 body，补上 `Access-Control-Allow-Origin: *`
 
 ## 3. 设置访问令牌（PROXY_TOKEN）

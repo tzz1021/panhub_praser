@@ -52,6 +52,11 @@ export interface LinkResult {
   ok: boolean;
   /** 失败原因（ok = false 时给出中文文案） */
   error?: string;
+  /**
+   * 与该直链同响应绑定的下载凭据（§12；UC = __pugs）。
+   * 导出 merger 按文件注入各自的值 —— 严禁用全局/跨响应的 cookie 替代。
+   */
+  cookie?: { key: string; value: string };
 }
 
 /** 批量直链获取配置（linkFetcher；节流参数参考 LinkSwift：15 个/批 + 1s） */
@@ -240,6 +245,8 @@ export interface ExportFile {
   url: string;
   /** 大小（字节，可选） */
   size?: number;
+  /** 与该直链同响应绑定的下载凭据（§12；UC = __pugs），merger 按文件注入 */
+  cookie?: { key: string; value: string };
 }
 
 /** 导出任务类型 */
