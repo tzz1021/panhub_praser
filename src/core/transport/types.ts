@@ -13,8 +13,6 @@
  * 约束：core/ 零网盘依赖 —— 本层只认识 HTTP，不认识任何网盘。
  */
 
-import { capturePugsFromHeaders } from '../pugs';
-
 /** 结构化网络错误（替代现在 adapter 里“猜 message 含 CORS”的方式） */
 export class TransportError extends Error {
   /** cors：被浏览器 CORS 拦截（direct 下才会发生） */
@@ -82,8 +80,6 @@ export class DirectTransport implements Transport {
     res.headers.forEach((v, k) => {
       headers[k] = v;
     });
-    // 捕获 UC __pugs（§10.2 代理捕获通道）：直连时响应头直接可见
-    capturePugsFromHeaders(res.headers);
     return {
       status: res.status,
       headers,
@@ -136,8 +132,6 @@ export class ProxyTransport implements Transport {
     res.headers.forEach((v, k) => {
       headers[k] = v;
     });
-    // 捕获 UC __pugs（§10.2 代理捕获通道）：代理把 upstream set-cookie 提取为 x-pugs 回传
-    capturePugsFromHeaders(res.headers);
     return {
       status: res.status,
       headers,

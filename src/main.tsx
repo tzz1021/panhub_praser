@@ -5,6 +5,7 @@
 import { Component, StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app';
+import { logServiceStart } from './core/footprint/globalLog';
 import './index.css';
 
 /** 全局错误边界：渲染期异常兜底，不白屏 */
@@ -32,6 +33,9 @@ const rootEl = document.getElementById('root');
 if (!rootEl) {
   throw new Error('挂载点 #root 不存在');
 }
+
+// 全局日志：记录服务启动（含上次启动时间，开发调试用）
+logServiceStart();
 
 createRoot(rootEl).render(
   <StrictMode>

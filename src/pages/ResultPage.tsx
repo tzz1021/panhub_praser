@@ -18,9 +18,9 @@ import { fetchLinks } from '../core/linkFetcher';
 import { getPreferences } from '../core/preferences';
 import { addRecord } from '../core/footprint/records';
 import { appendLog, listLogs, exportLogsMd } from '../core/footprint/logs';
+import { addGlobalLog } from '../core/footprint/globalLog';
 import { exportTask, exportTreeMd } from '../tasks/export';
 import { loadDownloaderConfig } from '../utils/downloader';
-import { copyText } from '../utils/clipboard';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
 import type { ExportFile, ParseSession, TaskKind, TreeNode } from '../core/types';
 import { linkAbbr } from './HomePage';
@@ -245,21 +245,7 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
     void handleFetchLinks(failed);
   };
 
-  /* ---------- 复制 / 直下 ---------- */
-  const copyLink = async (fid: string): Promise<void> => {
-    const l = links?.get(fid);
-    if (!l?.ok || !l.url) return;
-    const ok = await copyText(l.url);
-    toast(ok ? '已复制直链，请勿改动任何字符' : '复制失败，请手动复制', ok ? 'success' : 'error');
-  };
-
-  const browserDownload = (fid: string): void => {
-    const l = links?.get(fid);
-    if (!l?.ok || !l.url) return;
-    window.open(l.url, '_blank');
-  };
-
-  /* ---------- 导出 ---------- */
+  /* ---------- 导出（浏览器直连/复制直链已移除：UC referer 白名单拒绝第三方源，§10.1.4） ---------- */
   const buildExportFiles = (kind: TaskKind): ExportFile[] => {
     const keep = kind === 'curl' ? false : keepStructure;
     return selectedFiles
@@ -293,11 +279,14 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
       toast('请先勾选文件并批量解析', 'error');
       return;
     }
+    addGlobalLog(`=====检测到task=====\ntask类型：${kind}（${files.length} 个文件）`);
+    addGlobalLog('merger：扫描暂存区，搜索 dl-link 与必要 cookie');
     const { fileName, content } = exportTask(kind, files, {
       keepStructure: kind === 'curl' ? false : keepStructure,
       outDir: downloader.savePath || undefined,
     });
     downloadFile(fileName, content);
+    addGlobalLog(`merger：合并完成，已导出 ${fileName}（下载命令已就绪）`);
     toast(`已导出 ${fileName}`, 'success');
   };
 
@@ -440,8 +429,6 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
             }
             onToggleFile={toggleFile}
             onToggleDirAll={toggleDirAll}
-            onCopyLink={(fid) => void copyLink(fid)}
-            onDownloadLink={browserDownload}
           />
         </div>
       </div>

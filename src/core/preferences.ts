@@ -7,6 +7,7 @@
  * 写：setPreferences 顶层浅合并 + 嵌套分组逐组浅合并后写回。
  */
 import type { Preferences } from './types';
+import { addGlobalLog } from './footprint/globalLog';
 
 /** localStorage 键名 */
 const STORAGE_KEY = 'pan-web:prefs:v1';
@@ -137,12 +138,16 @@ export function getPreferences(): Preferences {
 /**
  * 更新偏好设置：以当前值（含已存储项）为基础做浅合并，写回 localStorage。
  * 写失败（配额等）静默忽略，内存合并结果照常返回。
+ * 变更写入全局日志（开发调试用，不过滤隐私）。
  */
 export function setPreferences(patch: Partial<Preferences>): Preferences {
   const merged = mergePrefs(getPreferences(), patch);
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+      // 全局日志：记录偏好变更的关键字段（不落值，只落键，避免敏感信息刷屏）
+      const keys = Object.keys(patch).join(',');
+      addGlobalLog(`修改了偏好设置：${keys}`);
     } catch {
       // 写失败静默忽略（隐私模式/配额超限），不影响本次返回值
     }

@@ -27,8 +27,6 @@ export interface DirectoryTreeProps {
   onToggleDir: (fid: string) => void;
   onToggleFile: (fid: string) => void;
   onToggleDirAll: (node: TreeNode) => void;
-  onCopyLink: (fid: string) => void;
-  onDownloadLink: (fid: string) => void;
 }
 
 export function DirectoryTree({
@@ -38,8 +36,6 @@ export function DirectoryTree({
   onToggleDir,
   onToggleFile,
   onToggleDirAll,
-  onCopyLink,
-  onDownloadLink,
 }: DirectoryTreeProps): JSX.Element {
   if (rows.length === 0) {
     return (
@@ -94,14 +90,9 @@ export function DirectoryTree({
                 <td className="col-num">{formatTime(f.modifiedAt)}</td>
                 <td className="col-action">
                   {!isDir && link?.ok && (
-                    <>
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopyLink(f.fid)}>
-                        复制直链
-                      </button>
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => onDownloadLink(f.fid)}>
-                        浏览器直下
-                      </button>
-                    </>
+                    <span className="field-hint" style={{ color: 'var(--ok, #28a745)' }} title="浏览器直连被 UC referer 白名单拒绝，请用导出命令下载（reverse-notes-uc.md §10）">
+                      用导出命令下载
+                    </span>
                   )}
                   {!isDir && link && !link.ok && (
                     <span className="field-hint" style={{ color: 'var(--danger)' }}>

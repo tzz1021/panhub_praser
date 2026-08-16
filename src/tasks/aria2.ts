@@ -16,7 +16,7 @@
  */
 
 import type { ExportFile, TaskOptions } from '../core/types';
-import { getPugs } from '../core/pugs';
+import { getPugs } from '../adapters/ucPugs';
 
 /** input-file 模式的任务文件名（与 generateAria2Command 输出保持配套） */
 export const ARIA2_INPUT_FILE_NAME = 'pan-web-tasks.txt';

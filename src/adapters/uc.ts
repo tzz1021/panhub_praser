@@ -24,6 +24,7 @@ import type {
   TokenResult,
 } from './types';
 import { getActiveTransport, TransportError, type TransportResponse } from '../core/transport/types';
+import { capturePugsFromHeaders } from './ucPugs';
 
 /** UC 分享 ID 形如 https://drive.uc.cn/s/dd2ad2345e124 或 /share/xxx */
 const SHARE_URL_RE = /^https?:\/\/(?:[a-z0-9-]+\.)*uc\.cn\/(?:s|share)\/([A-Za-z0-9_-]+)/i;
@@ -114,6 +115,8 @@ async function request<T, M = unknown>(
     }
     throw err instanceof Error ? err : new Error(`网络请求失败（${step}）：${String(err)}`);
   }
+  // §10.2 代理捕获通道：UC 响应 Set-Cookie 下发的 __pugs 经代理回传为 x-pugs，在这里收口落库
+  capturePugsFromHeaders(res.headers);
   if (res.status === 401) {
     fail(401, '请检查请求参数完整性（entry 参数缺失或触发风控）');
   }
@@ -256,6 +259,11 @@ export const ucAdapter: PanAdapter = {
   id: 'uc',
   name: 'UC 网盘',
   limits: UC_LIMITS,
+  cookie: {
+    key: '__pugs',
+    displayName: '双下划线pugs',
+    missingHint: '没有请检查你的杂鱼浏览器是不是开启了cookie存储限制或者无痕模式，开发者请检查插件比如AdGuard可能会拦截标签页开启',
+  },
   detect,
   parseShareId,
   getToken,

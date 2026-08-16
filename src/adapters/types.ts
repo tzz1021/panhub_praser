@@ -118,6 +118,16 @@ export interface PanLimits {
  * 「tree」由 core/treeWalker 调用本接口的 list() 递归完成（深度/并发/聚合归 core），
  * 适配器只负责单层目录列表 —— 与 STRUCTURE.md 职责划分一致。
  */
+/** 网盘下载层需要的 cookie 规格（reverse-notes-uc.md §10；null/缺省 = 不需要） */
+export interface CookieRequirement {
+  /** cookie 名（如 "__pugs"） */
+  key: string;
+  /** 展示名（如 "双下划线pugs"） */
+  displayName: string;
+  /** 未捕获到值时的供应商专属排查话术 */
+  missingHint: string;
+}
+
 export interface PanAdapter {
   /** 唯一标识（kebab-case，如 "uc"） */
   readonly id: string;
@@ -127,6 +137,8 @@ export interface PanAdapter {
   readonly limits: PanLimits;
   /** 该网盘是否识别此分享链接 */
   detect(url: string): boolean;
+  /** 下载层 cookie 规格（UC 需要 __pugs；无 = 不需要 cookie） */
+  readonly cookie?: CookieRequirement;
   /** 从分享链接提取分享 ID；无法识别返回 null */
   parseShareId(url: string): ShareId | null;
   /** 获取分享访问令牌（token 三连第一步） */

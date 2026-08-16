@@ -18,6 +18,7 @@ import { listLinks, removeLink, updateLinkNote, clearLinks } from '../core/footp
 import { listTrees, removeTree, clearTrees } from '../core/footprint/trees';
 import { listAllRecords, removeRecordsByShareId, clearRecords } from '../core/footprint/records';
 import { listLogs, removeLogsByUrl, clearLogs, exportLogsMd } from '../core/footprint/logs';
+import { listGlobalLogs, clearGlobalLogs, type GlobalLogEntry } from '../core/footprint/globalLog';
 import type { LinkRecord, ParseRecord, TreeSnapshot } from '../core/types';
 import { formatTime } from '../utils/format';
 import { linkAbbr } from './HomePage';
@@ -88,6 +89,9 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [editingNote, setEditingNote] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState('');
+  // 全局日志（开发调试）：默认折叠，展开时刷新
+  const [showGlobalLog, setShowGlobalLog] = useState(false);
+  const [globalLogs, setGlobalLogs] = useState<GlobalLogEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   /** view raw：正在查看原始 JSON 的链接（null=未打开） */
   const [raw, setRaw] = useState<{ title: string; json: string } | null>(null);
@@ -154,13 +158,20 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
     toast('已清空全部历史', 'success');
   };
 
-  /** 导出历史（仅链接+时间，JSON 元数据；只做导出不做导入，1.1） */
+  /** 导出历史（记录为时间轴数据源，含成功/失败；JSON 元数据；只做导出不做导入，1.1） */
   const exportHistory = async (): Promise<void> => {
-    const links = await listLinks(500);
-    const payload = links.map((l) => ({ time: new Date(l.addedAt).toISOString(), url: l.url }));
+    const records = await listAllRecords(500);
+    const payload = records.map((r) => ({
+      time: new Date(r.parsedAt).toISOString(),
+      url: r.url,
+      adapterId: r.adapterId,
+      ok: r.ok,
+      fileCount: r.fileCount,
+      error: r.error ?? null,
+    }));
     const fileName = `panhub-praser-history-${new Date().toISOString().slice(0, 10)}.json`;
     downloadFile(fileName, JSON.stringify(payload, null, 2));
-    toast(`已导出 ${payload.length} 条历史链接`, 'success');
+    toast(`已导出 ${payload.length} 条历史记录`, 'success');
   };
 
   /** view raw：拉取该链接的全部原始足迹（records/link/tree/logs）并序列化展示（1.1） */
@@ -274,6 +285,88 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
             </div>
           </div>
           <PanTable selectedId={filter} onSelect={setFilter} lastChip="all" />
+        </div>
+      </div>
+
+      {/* 全局日志（开发调试）：十盘 banner 下方，默认折叠，展开时刷新 */}
+      <div className="card">
+        <div className="card-body" style={{ padding: '10px 14px' }}>
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}
+            onClick={() => {
+              const next = !showGlobalLog;
+              setShowGlobalLog(next);
+              if (next) setGlobalLogs(listGlobalLogs());
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{showGlobalLog ? '▾' : '▸'} 📜 全局日志</span>
+            <span className="field-hint" style={{ fontSize: 12 }}>
+              仅用于开发调试，不会过滤隐私信息
+            </span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-faint)' }}>
+              {globalLogs.length} 条
+            </span>
+          </div>
+          {showGlobalLog && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setGlobalLogs(listGlobalLogs());
+                  }}
+                >
+                  刷新
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm('确认清空全部全局日志？此操作不可恢复')) {
+                      clearGlobalLogs();
+                      setGlobalLogs([]);
+                    }
+                  }}
+                >
+                  清空
+                </button>
+              </div>
+              {globalLogs.length === 0 ? (
+                <div className="empty-state" style={{ padding: '12px 0' }}>
+                  <span>暂无全局日志</span>
+                </div>
+              ) : (
+                <pre
+                  style={{
+                    maxHeight: '40vh',
+                    overflow: 'auto',
+                    margin: 0,
+                    padding: 10,
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    background: 'var(--bg-code, rgba(0,0,0,0.06))',
+                    borderRadius: 6,
+                    border: '1px solid var(--border)',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {globalLogs
+                    .map((e) => {
+                      const t = new Date(e.time);
+                      const hh = String(t.getHours()).padStart(2, '0');
+                      const mm = String(t.getMinutes()).padStart(2, '0');
+                      const ss = String(t.getSeconds()).padStart(2, '0');
+                      return `${hh}:${mm}:${ss} ${e.message}`;
+                    })
+                    .join('\n')}
+                </pre>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

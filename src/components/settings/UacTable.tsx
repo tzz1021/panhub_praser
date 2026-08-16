@@ -14,6 +14,7 @@ import { useToast } from '../Toast';
 import { getActiveTransport, setActiveTransport, transportFromPrefs } from '../../core/transport/types';
 import { ProxyTransport } from '../../core/transport/types';
 import { listAllRecords } from '../../core/footprint/records';
+import { addGlobalLog } from '../../core/footprint/globalLog';
 
 /** 开关 */
 export function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label?: string }): JSX.Element {
@@ -53,7 +54,7 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
   };
 
   const modalRows: Array<{ key: keyof ModalPrefs; label: string; sub?: string }> = [
-    { key: 'cookieWarn', label: '读取 Cookie 警告弹窗', sub: '解析时弹窗并新标签预热下载令牌（UC 需 __pugs，游客态即可）' },
+    { key: 'cookieWarn', label: 'cookie读取状态警告', sub: '跟踪本机状态，以免获取无效的长command（UC 需 __pugs，默认开）' },
     { key: 'loginJump', label: '需要登录但未登录/过期 → 跳转提示弹窗' },
     { key: 'autoCloseTab', label: '自动关闭新标签页', sub: '只能关闭本站打开的标签' },
     { key: 'corsAutoJump', label: 'CORS 拦截后自动跳转', sub: '备用形式：跳分享页供书签解析，退出本站自动清理；默认关=先弹窗' },
@@ -182,10 +183,14 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
               setTesting(true);
               const prev = getActiveTransport();
               setActiveTransport(new ProxyTransport(url, tokenDraft.trim()));
+              // 全局日志：代理连通测试（开发调试用，打印 POST 方法与目标）
+              addGlobalLog(`发起请求：POST https://pc-api.uc.cn/1/clouddrive/share/sharepage/token（经代理 ${url}）`);
               try {
                 await adapter.getToken({ shareId, passcode: '' });
+                addGlobalLog('响应成功：代理连通，token 接口全链路通过');
                 toast('代理连通，最新分享链接解析成功 ✅', 'success');
               } catch (err) {
+                addGlobalLog(`测试失败：${err instanceof Error ? err.message : String(err)}`);
                 toast(`测试失败：${err instanceof Error ? err.message : String(err)}`, 'error');
               } finally {
                 setActiveTransport(prev);

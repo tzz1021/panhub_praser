@@ -12,7 +12,7 @@
  */
 
 import type { ExportFile, TaskOptions } from '../core/types';
-import { getPugs } from '../core/pugs';
+import { getPugs } from '../adapters/ucPugs';
 
 /** 取 path 去掉文件名部分作为相对目录；根目录（无目录）返回空串 */
 function dirNameOf(path: string): string {

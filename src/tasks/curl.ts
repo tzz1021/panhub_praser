@@ -12,7 +12,7 @@
  */
 
 import type { ExportFile, TaskOptions } from '../core/types';
-import { getPugs } from '../core/pugs';
+import { getPugs } from '../adapters/ucPugs';
 
 /** UC 客户端 UA（reverse-notes-uc.md §5 实测组合） */
 export const UC_DOWNLOAD_UA =

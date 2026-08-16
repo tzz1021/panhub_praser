@@ -18,6 +18,8 @@ import { useToast } from '../components/Toast';
 import { buildTree } from '../core/treeWalker';
 import { classifyError, isCorsError } from '../core/errors';
 import { getPreferences } from '../core/preferences';
+import { getPugs } from '../adapters/ucPugs';
+import { addGlobalLog } from '../core/footprint/globalLog';
 import { addLink } from '../core/footprint/links';
 import { saveTree } from '../core/footprint/trees';
 import { addRecord } from '../core/footprint/records';
@@ -112,9 +114,11 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       toast('识别失败，请检查格式是否正确', 'error');
       return;
     }
-    // §10：下载层需 __pugs 的网盘（UC）→ 解析前弹窗；确认后新标签预热（解析并行不阻塞）
+    // §10：下载层需 cookie 的网盘（UC）→ 解析前弹窗；确认后新标签预热（解析并行不阻塞）
     const prefs = getPreferences();
-    if (prefs.modals.cookieWarn && adapter.limits.needsCookie) {
+    if (prefs.modals.cookieWarn && adapter.cookie) {
+      addGlobalLog('=====开始收集必要信息=====');
+      addGlobalLog('获取cookie：弹窗已出现，等待用户选择');
       setCookieWarn({ adapter, url: shareUrl, passcode: pc });
       return;
     }
@@ -130,8 +134,12 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
     const win = window.open(shareUrl, '_blank');
     if (!win) {
       toast('浏览器拦截了弹窗：下载时可能被 UC 拒绝（403），可手动打开一次分享页再下载', 'error');
+      addGlobalLog('获取cookie：浏览器拦截了弹窗（需手动放行）');
       return;
     }
+    const pugs = getPugs();
+    addGlobalLog(`获取cookie：开启标签页成功 ${shareUrl}`);
+    addGlobalLog(`获取cookie：${pugs ? `已获取必要值 __pugs=<已捕获 ${pugs.length} 字符> 已写入暂存区` : '暂存区暂无 __pugs（解析后代理捕获会自动写入）'}`);
     // 给页面 JS 触发 API、Set-Cookie 落 jar 的时间（§10.4 待验证最佳时长）
     const timer = window.setTimeout(() => {
       try {
@@ -159,6 +167,14 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       toast('识别失败，请检查格式是否正确', 'error');
       return;
     }
+    // 全局日志：任务开始 + 设置快照（开发调试用）
+    const prefs = getPreferences();
+    addGlobalLog(`收到任务：${linkAbbr(shareUrl, adapter.id)}。正在记录活动`);
+    addGlobalLog('=====开始读取当前设置=====');
+    addGlobalLog(`供应商：${adapter.name}`);
+    addGlobalLog(`CORS策略：${prefs.transport.mode === 'proxy' ? 'proxy代理' : 'direct直连'}`);
+    if (adapter.cookie) addGlobalLog(`其他需要的参数：${adapter.cookie.displayName}（未登录态cookie）`);
+    addGlobalLog(`读取cookie提示：${prefs.modals.cookieWarn ? '开启' : '关闭'}`);
     setBusy(true);
     setProgress({ done: 0, total: 1 });
     const abbr = linkAbbr(shareUrl, adapter.id);
@@ -205,6 +221,7 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
         await appendLog({ time: now, level: 'info', adapterId: adapter.id, url: shareUrl, message: `解析成功：${abbr}，共 ${countFiles(root)} 个文件` });
       }
       onParsed({ adapter, url: shareUrl, shareId, stoken, root, parsedAt: now });
+      addGlobalLog('响应成功：已获取文件列表；目录树已写入暂存区；HomePage已刷新：等待操作');
     } catch (err) {
       const { category, message } = classifyError(err);
       const now = Date.now();
@@ -282,18 +299,22 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
           onOpenSettings={onOpenSettings}
         />
       )}
-      {cookieWarn && (
+      {cookieWarn && cookieWarn.adapter.cookie && (
         <CookieWarnModal
           panName={cookieWarn.adapter.name}
+          cookie={cookieWarn.adapter.cookie}
+          capturedValue={getPugs() ?? ''}
           onCancel={() => {
             const { adapter: a, url: u, passcode: p } = cookieWarn;
             setCookieWarn(null);
-            void runParse(a, u, p); // 跳过预热，照常解析
+            addGlobalLog('获取cookie：用户选择“算了吧”（跳过预热，继续解析）');
+            void runParse(a, u, p); // 算了吧：跳过预热，照常解析
           }}
           onConfirm={() => {
             const { adapter: a, url: u, passcode: p } = cookieWarn;
             setCookieWarn(null);
-            primeCookieTab(u); // 新标签预热（解析并行进行）
+            addGlobalLog('获取cookie：用户已确认，开始新标签预热');
+            primeCookieTab(u); // 我已阅：新标签预热（解析并行进行）
             void runParse(a, u, p);
           }}
         />
