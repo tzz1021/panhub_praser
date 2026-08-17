@@ -18,4 +18,3 @@ Thumbs.db
 # 日志与临时文件
 *.log
 *.tmp
-.wrangler/

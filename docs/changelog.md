@@ -5,28 +5,6 @@
 
 ---
 
-## [v1.1.4] 2026-08-16 —— 回溯复用 + 首屏传输初始化修复（CF 链路实测确认）
-
-### 新增
-- **回溯功能**：历史页“再次解析”时，若上次解析在适配器复用窗口内（`reuseWindowHours`，
-  取决于云服务商过期时间；UC = 6h）且快照带 stoken → **直接复用本地快照进结果页**：
-  不请求代理（避免刷转发次数）、无弹窗，结果页时间/过期倒计时正常显示；窗口外回退正常重新解析
-- scripts/live-proxy-check.mjs：线上代理 x-pugs 全链路验证脚本（token → stoken → 目录 →
-  download 检查 x-pugs → 同响应 pugs 探测 OSS 直链），自动判定 CF 通道是否可用
-- proxy.js 诊断日志（一行，定位后删除）：每次转发打印上游状态 + set-cookie 来源 + x-pugs 捕获与否
-
-### 修复
-- **首屏 CORS 弹窗**：启动即激活已保存的传输配置（main.tsx 初始化 setActiveTransport），
-  不再默认 direct 导致每次获取资源列表都弹 CORS、必须进设置点“保存”才生效
-- 移除远端残留的 src/core/pugs.ts（v1.1.2 架构纠偏遗漏，无引用）
-
-### 变更
-- TreeSnapshot 增加 stoken 字段（回溯复用需要；旧快照无 stoken 则不可复用）
-- PanAdapter 增加 reuseWindowHours（默认缺省 = 不复用，各网盘按自身过期时间配置）
-- reverse-notes-uc.md 追加 §12.6；changelog 同步
-
----
-
 ## [v1.1.3] 2026-08-16 —— pugs 同响应绑定（架构级修复）+ 单文件解析 + CF 能力验证
 
 ### 新增

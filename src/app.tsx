@@ -126,12 +126,6 @@ export function App(): ReactNode {
               setPendingParse({ url, autoParse });
               window.location.hash = '#/';
             }}
-            onReuse={(s) => {
-              // 回溯复用：窗口内再次解析直接进结果页（不请求代理、无弹窗）
-              setSession(s);
-              setPendingParse(null);
-              window.location.hash = '#/result';
-            }}
           />
         ) : view === 'dev' ? (
           <DevPage />

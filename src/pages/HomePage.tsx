@@ -164,7 +164,6 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
           savedAt: now,
           fileCount,
           totalSize: root.size,
-          stoken, // 回溯复用需要（历史“再次解析”窗口内免代理），见 adapters/types.ts reuseWindowHours
         });
       }
       await addRecord({

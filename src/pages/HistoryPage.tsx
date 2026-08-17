@@ -15,12 +15,11 @@ import type { JSX } from 'react';
 import { PanTable, PAN_LIST } from '../components/PanTable';
 import { useToast } from '../components/Toast';
 import { listLinks, removeLink, updateLinkNote, clearLinks } from '../core/footprint/links';
-import { listTrees, removeTree, clearTrees, getTree } from '../core/footprint/trees';
+import { listTrees, removeTree, clearTrees } from '../core/footprint/trees';
 import { listAllRecords, removeRecordsByShareId, clearRecords } from '../core/footprint/records';
 import { listLogs, removeLogsByUrl, clearLogs, exportLogsMd } from '../core/footprint/logs';
-import { listGlobalLogs, clearGlobalLogs, addGlobalLog, type GlobalLogEntry } from '../core/footprint/globalLog';
-import { detectShareUrl } from '../adapters/registry';
-import type { LinkRecord, ParseRecord, ParseSession, TreeSnapshot } from '../core/types';
+import { listGlobalLogs, clearGlobalLogs, type GlobalLogEntry } from '../core/footprint/globalLog';
+import type { LinkRecord, ParseRecord, TreeSnapshot } from '../core/types';
 import { formatTime } from '../utils/format';
 import { linkAbbr } from './HomePage';
 
@@ -82,11 +81,9 @@ function downloadFile(fileName: string, content: string): void {
 export interface HistoryPageProps {
   /** 重新解析：回输入页并自动填充（autoParse=true 时自动触发） */
   onReparse: (url: string, autoParse?: boolean) => void;
-  /** 回溯复用：窗口内再次解析直接进结果页（免代理、无弹窗） */
-  onReuse: (session: ParseSession) => void;
 }
 
-export function HistoryPage({ onReparse, onReuse }: HistoryPageProps): JSX.Element {
+export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
   const [groups, setGroups] = useState<TimelineGroup[]>([]);
   const [filter, setFilter] = useState<string | 'all'>('all');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -99,32 +96,6 @@ export function HistoryPage({ onReparse, onReuse }: HistoryPageProps): JSX.Eleme
   /** view raw：正在查看原始 JSON 的链接（null=未打开） */
   const [raw, setRaw] = useState<{ title: string; json: string } | null>(null);
   const { toast } = useToast();
-
-  /**
-   * 回溯复用（v1.1.4）：历史“再次解析”时，若上次解析在适配器复用窗口内
-   * （reuseWindowHours，取决于云服务商过期时间）且快照带 stoken → 直接复用本地快照
-   * 进结果页：不请求代理、无弹窗；否则走正常重新解析。
-   */
-  const handleReparse = async (g: TimelineGroup): Promise<void> => {
-    const adapter = detectShareUrl(g.url);
-    const hours = adapter?.reuseWindowHours ?? 0;
-    if (adapter && hours > 0) {
-      const snap = await getTree(g.shareId).catch(() => undefined);
-      if (snap?.stoken && snap.adapterId === adapter.id && Date.now() - snap.savedAt < hours * 3600_000) {
-        addGlobalLog(`回溯：${linkAbbr(g.url, adapter.id)} 窗口内（${hours}h）复用 ${formatTime(snap.savedAt)} 快照，未请求代理`);
-        onReuse({
-          adapter,
-          url: g.url,
-          shareId: g.shareId,
-          stoken: snap.stoken,
-          root: snap.root,
-          parsedAt: snap.savedAt,
-        });
-        return;
-      }
-    }
-    onReparse(g.url, true);
-  };
 
   useEffect(() => {
     void (async () => {
@@ -486,7 +457,7 @@ export function HistoryPage({ onReparse, onReuse }: HistoryPageProps): JSX.Eleme
                         >
                           修改备注
                         </button>
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void handleReparse(g)} title="窗口内（UC 6h）直接复用上次结果，不请求代理">
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => onReparse(g.url, true)}>
                           重新解析
                         </button>
                         <button type="button" className="btn btn-ghost btn-sm" onClick={() => void downloadLog(g)}>

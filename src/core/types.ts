@@ -195,8 +195,6 @@ export interface TreeSnapshot {
   fileCount: number;
   /** 总大小字节 */
   totalSize: number;
-  /** 分享访问令牌（回溯复用需要；旧快照可能没有 → 不可复用） */
-  stoken?: string;
 }
 
 /** 足迹：解析记录（在目录树呈现：时间/次数/是否成功，默认斜体） */

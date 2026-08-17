@@ -281,8 +281,6 @@ export const ucAdapter: PanAdapter = {
     displayName: '双下划线pugs',
     missingHint: '没有请检查你的杂鱼浏览器是不是开启了cookie存储限制或者无痕模式，开发者请检查插件比如AdGuard可能会拦截标签页开启',
   },
-  // 回溯窗口：下载直链/__pugs 3-6h 过期，窗口内再次解析直接复用本地快照（stoken 可用），不请求代理
-  reuseWindowHours: 6,
   detect,
   parseShareId,
   getToken,

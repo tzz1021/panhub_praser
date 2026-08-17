@@ -197,12 +197,9 @@ export async function onRequestPost(context) {
     'Content-Type': upstream.headers.get('content-type') ?? 'application/json; charset=utf-8',
   };
   // 捕获 __pugs（UC 下载鉴权唯一必需 cookie）回传 SPA（§10.2 代理捕获通道）
-  const setCookieRaw = upstream.headers.get('set-cookie');
-  const pugs = extractPugs(setCookieRaw);
+  const pugs = extractPugs(upstream.headers.get('set-cookie'));
   if (pugs) {
     respHeaders['x-pugs'] = pugs;
   }
-  // 诊断日志（排查 CF 边缘是否收到上游 __pugs；定位后删除）：
-  console.log(`[proxy] ${method} ${target.hostname} -> ${upstream.status} | set-cookie: ${setCookieRaw ? setCookieRaw.split(';')[0] : '(none)'} | x-pugs: ${pugs ? 'YES' : 'no'}`);
   return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
 }

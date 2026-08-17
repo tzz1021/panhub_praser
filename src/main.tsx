@@ -6,8 +6,6 @@ import { Component, StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app';
 import { logServiceStart } from './core/footprint/globalLog';
-import { getPreferences } from './core/preferences';
-import { setActiveTransport, transportFromPrefs } from './core/transport/types';
 import './index.css';
 
 /** 全局错误边界：渲染期异常兜底，不白屏 */
@@ -38,10 +36,6 @@ if (!rootEl) {
 
 // 全局日志：记录服务启动（含上次启动时间，开发调试用）
 logServiceStart();
-
-// 启动即激活已保存的传输配置（mode/proxyUrl/proxyToken）：
-// 否则首屏默认 direct → 每次获取资源列表都触发 CORS 弹窗，需进设置点保存才生效（v1.1.4 修复）
-setActiveTransport(transportFromPrefs(getPreferences().transport));
 
 createRoot(rootEl).render(
   <StrictMode>
