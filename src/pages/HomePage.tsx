@@ -14,15 +14,15 @@ import { DownloaderModal } from '../components/DownloaderModal';
 import { LoginJumpModal } from '../components/LoginJumpModal';
 import { CorsJumpModal } from '../components/CorsJumpModal';
 import { useToast } from '../components/Toast';
-import { buildTree } from '../core/treeWalker';
+import { fetchListSnapshot, renderTreeText, hhmmss, countFiles } from '../core/listFetcher';
 import { classifyError, isCorsError } from '../core/errors';
 import { getPreferences } from '../core/preferences';
 import { addGlobalLog } from '../core/footprint/globalLog';
 import { addLink } from '../core/footprint/links';
-import { saveTree } from '../core/footprint/trees';
+import { getTree, saveTree } from '../core/footprint/trees';
 import { addRecord } from '../core/footprint/records';
 import { appendLog } from '../core/footprint/logs';
-import type { ParseSession } from '../core/types';
+import type { ListSnapshot, ParseSession } from '../core/types';
 
 /** 分享链接缩写（日志/足迹命名用，如 uc-dd2ad2345e124） */
 export function linkAbbr(url: string, adapterId: string): string {
@@ -110,14 +110,15 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       toast('识别失败，请检查格式是否正确', 'error');
       return;
     }
-    // §12/顺序固化：获取资源列表 = 游客态浏览（ls 不需要 cookie），直接解析目录树；
-    // cookie（UC __pugs）只在结果页“解析下载链接”阶段才需要（single-link 示例日志顺序）
-    addGlobalLog('=====获取资源列表已点击=====');
+    // §12/顺序固化：获取资源列表（ls）= 游客态浏览（不需要 cookie），直接解析目录树；
+    // cookie（UC __pugs）只在结果页“解析下载方式”（prase）阶段才需要
+    addGlobalLog('=====获取资源列表（ls）=====');
     await runParse(adapter, shareUrl, pc);
   };
 
   /**
-   * 实际解析流程（获取文件列表：游客态请求，不需要 cookie，§12）
+   * 获取资源列表（ls）：优先复用缓存快照（reuseWindowHours 窗口内，v1.1.4），
+   * 未命中/过期才走 getToken + 目录树遍历（游客态请求，不需要 cookie，§12）。
    */
   const runParse = async (adapter: PanAdapter, shareUrl: string, pc: string): Promise<void> => {
     const shareId = adapter.parseShareId(shareUrl);
@@ -125,61 +126,80 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       toast('识别失败，请检查格式是否正确', 'error');
       return;
     }
-    // 全局日志：任务开始 + 设置快照（开发调试用）
     const prefs = getPreferences();
-    addGlobalLog(`收到任务：${linkAbbr(shareUrl, adapter.id)}。正在记录活动`);
-    addGlobalLog('=====开始读取当前设置=====');
-    addGlobalLog(`供应商：${adapter.name}`);
-    addGlobalLog(`CORS策略：${prefs.transport.mode === 'proxy' ? 'proxy代理' : 'direct直连'}`);
-    if (adapter.cookie) addGlobalLog(`其他需要的参数：${adapter.cookie.displayName}（未登录态cookie）`);
-    addGlobalLog(`读取cookie提示：${prefs.modals.cookieWarn ? '开启' : '关闭'}`);
+    const abbr = linkAbbr(shareUrl, adapter.id);
+    addGlobalLog(`ls：供应商 ${adapter.name} · 分享 ${abbr}`);
+    if (adapter.cookie) {
+      addGlobalLog(`ls：${adapter.cookie.displayName}（未登录态cookie）在 prase 阶段才需要，本阶段不涉及`);
+    }
+    addGlobalLog(`ls：复用窗口 ${prefs.reuseWindowHours}h · cookie 提示 ${prefs.modals.cookieWarn ? '开启' : '关闭'} · 通道 ${prefs.transport.mode === 'proxy' ? 'proxy代理' : 'direct直连'}`);
     setBusy(true);
     setProgress({ done: 0, total: 1 });
-    const abbr = linkAbbr(shareUrl, adapter.id);
+    const now = Date.now();
     try {
-      // token 二次校验（分享有效性检测：无效分享/提取码错误会在此报错）
-      const { stoken } = await adapter.getToken({ shareId, passcode: pc || undefined });
-      // 目录树（递归 + 大小聚合，并发 3）
-      const root = await buildTree(
-        { adapter, shareId, stoken },
-        {
-          recursive: true,
-          concurrency: 3,
+      // ① 快照复用：窗口内命中足迹缓存（目录树 + stoken）→ 跳过整轮 ls
+      const reuseWinMs = prefs.reuseWindowHours > 0 ? prefs.reuseWindowHours * 3600_000 : 0;
+      let snap: ListSnapshot | null = null;
+      if (reuseWinMs > 0 && prefs.footprint.keepTrees) {
+        const cached = await getTree(shareId);
+        if (cached?.stoken && now - cached.savedAt < reuseWinMs) {
+          const mins = Math.max(1, Math.round((now - cached.savedAt) / 60000));
+          addGlobalLog(`ls：命中缓存资源列表（${mins} 分钟前，窗口 ${prefs.reuseWindowHours}h），复用目录树 + stoken，跳过遍历`);
+          snap = {
+            shareId,
+            url: shareUrl,
+            adapterId: adapter.id,
+            stoken: cached.stoken,
+            root: cached.root,
+            fetchedAt: cached.savedAt,
+            fileCount: cached.fileCount,
+            totalSize: cached.totalSize,
+          };
+        } else if (cached) {
+          addGlobalLog(`ls：缓存快照过期或缺少 stoken（${Math.round((now - cached.savedAt) / 60000)} 分钟前），重新拉取`);
+        }
+      }
+      // ② 未命中：完整 ls（token 校验 + 目录树递归）
+      if (!snap) {
+        addGlobalLog('ls：开始拉取目录树（并发 3，分页 50/页）…');
+        snap = await fetchListSnapshot(adapter, shareId, shareUrl, {
+          passcode: pc,
           onProgress: (done, total) => setProgress({ done, total }),
-        },
-      );
-      // 足迹落库（仅本地）
-      const prefs = getPreferences();
-      const now = Date.now();
+        });
+        if (prefs.footprint.keepTrees) {
+          await saveTree({
+            shareId,
+            url: shareUrl,
+            adapterId: adapter.id,
+            root: snap.root,
+            savedAt: snap.fetchedAt,
+            fileCount: snap.fileCount,
+            totalSize: snap.totalSize,
+            stoken: snap.stoken,
+          });
+        }
+        // 目录树打印到全局日志（UI 侧对过长树自动折叠）+ 刷新标记（v1.1.4 规范日志）
+        addGlobalLog(`=====目录树（${snap.fileCount} 个文件 / ${snap.totalSize} 字节）=====\n${renderTreeText(snap.root)}\n=====目录树结束=====`);
+        addGlobalLog(`=====资源列表已刷新，当前${hhmmss(snap.fetchedAt)}=====`);
+      }
+      // 足迹落库（复用与全量都记：链接查重 / 解析记录 / 日志）
       if (prefs.footprint.keepLinks) {
         await addLink({ url: shareUrl, adapterId: adapter.id, shareId });
-      }
-      if (prefs.footprint.keepTrees) {
-        const fileCount = countFiles(root);
-        await saveTree({
-          shareId,
-          url: shareUrl,
-          adapterId: adapter.id,
-          root,
-          savedAt: now,
-          fileCount,
-          totalSize: root.size,
-        });
       }
       await addRecord({
         shareId,
         url: shareUrl,
         adapterId: adapter.id,
-        parsedAt: now,
+        parsedAt: snap.fetchedAt,
         ok: true,
-        fileCount: countFiles(root),
-        title: root.children?.[0]?.file.fileName, // 首个文件（夹）名，历史页标题用（1.0.2）
+        fileCount: snap.fileCount,
+        title: snap.root.children?.[0]?.file.fileName, // 首个文件（夹）名，历史页标题用（1.0.2）
       });
       if (prefs.footprint.keepLogs) {
-        await appendLog({ time: now, level: 'info', adapterId: adapter.id, url: shareUrl, message: `解析成功：${abbr}，共 ${countFiles(root)} 个文件` });
+        await appendLog({ time: snap.fetchedAt, level: 'info', adapterId: adapter.id, url: shareUrl, message: `获取资源列表成功：${abbr}，共 ${snap.fileCount} 个文件（${snap.totalSize} 字节）` });
       }
-      onParsed({ adapter, url: shareUrl, shareId, stoken, root, parsedAt: now });
-      addGlobalLog('响应成功：已获取文件列表；目录树已写入暂存区；HomePage已刷新：等待操作');
+      onParsed({ adapter, url: shareUrl, shareId, stoken: snap.stoken, root: snap.root, parsedAt: snap.fetchedAt });
+      addGlobalLog(`ls：已就绪 — ${snap.fileCount} 个文件可勾选，解析下载方式（prase）在结果页进行`);
     } catch (err) {
       const { category, message } = classifyError(err);
       const now = Date.now();
@@ -261,14 +281,3 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
   );
 }
 
-/** 统计树中文件数（递归） */
-export function countFiles(node: { children?: unknown[] }): number {
-  if (!node.children) return 0;
-  let n = 0;
-  for (const c of node.children) {
-    const item = c as { file?: { dir?: boolean }; children?: unknown[] };
-    if (item.file?.dir) n += countFiles(item);
-    else n += 1;
-  }
-  return n;
-}

@@ -339,31 +339,34 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
                   <span>暂无全局日志</span>
                 </div>
               ) : (
-                <pre
-                  style={{
-                    maxHeight: '40vh',
-                    overflow: 'auto',
-                    margin: 0,
-                    padding: 10,
-                    fontSize: 12,
-                    lineHeight: 1.6,
-                    background: 'var(--bg-code, rgba(0,0,0,0.06))',
-                    borderRadius: 6,
-                    border: '1px solid var(--border)',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-all',
-                  }}
-                >
-                  {globalLogs
-                    .map((e) => {
-                      const t = new Date(e.time);
-                      const hh = String(t.getHours()).padStart(2, '0');
-                      const mm = String(t.getMinutes()).padStart(2, '0');
-                      const ss = String(t.getSeconds()).padStart(2, '0');
-                      return `${hh}:${mm}:${ss} ${e.message}`;
-                    })
-                    .join('\n')}
-                </pre>
+                <div className="global-log-list">
+                  {globalLogs.map((e, i) => {
+                    const t = new Date(e.time);
+                    const p = (n: number): string => String(n).padStart(2, '0');
+                    const stamp = `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
+                    // 目录树条目（v1.1.4）：过长自动折叠，点击展开（检测 `=====目录树` 头）
+                    if (e.message.startsWith('=====目录树')) {
+                      const nl = e.message.indexOf('\n');
+                      const header = nl > 0 ? e.message.slice(0, nl) : e.message;
+                      const body = nl > 0 ? e.message.slice(nl + 1).replace(/\n=====目录树结束=====$/, '') : '';
+                      return (
+                        <div className="global-log-entry" key={i}>
+                          <span className="global-log-time">{stamp}</span>
+                          <details className="log-tree">
+                            <summary>🌳 {header}（过长自动折叠，点击展开）</summary>
+                            <pre>{body}</pre>
+                          </details>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="global-log-entry" key={i}>
+                        <span className="global-log-time">{stamp}</span>
+                        <span className="global-log-msg">{e.message}</span>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}

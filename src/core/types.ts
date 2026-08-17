@@ -10,6 +10,37 @@
 
 import type { PanAdapter, ShareFile, Stoken } from '../adapters/types';
 
+/* ============================== 资源列表快照（ls） ============================== */
+
+/**
+ * 资源列表快照（ls 产物）：一次「获取资源列表」的完整结果。
+ *
+ * 语义（v1.1.4 起术语分离）：
+ * - ls（获取资源列表）= getToken + 目录树遍历，产物可复用（reuseWindowHours 内）；
+ * - prase（解析下载方式）= 按文件打 download 接口取 oss+sig，每次实时捕获 __pugs。
+ *
+ * 复用安全依据：短时间内分享内容不变、stoken 不过期；目录树携带每个文件的
+ * fid + shareFidToken 映射，prase 直接按 fid 取映射再请求 download，无需重新 ls。
+ */
+export interface ListSnapshot {
+  /** 分享 ID */
+  shareId: string;
+  /** 分享链接 */
+  url: string;
+  /** 适配器 id */
+  adapterId: string;
+  /** 分享访问令牌（后续 prase 都要携带） */
+  stoken: string;
+  /** 目录树（根节点） */
+  root: TreeNode;
+  /** ls 完成时间 ms */
+  fetchedAt: number;
+  /** 文件总数 */
+  fileCount: number;
+  /** 总大小字节 */
+  totalSize: number;
+}
+
 /* ============================== 目录树 ============================== */
 
 /** 目录树节点（treeWalker 产物；tasks/export/footprint/UI 共用） */
@@ -81,8 +112,10 @@ export interface ModalPrefs {
   autoCloseTab: boolean;
   /** 批量解析"仅支持 aria2/gopeed"弹窗 */
   batchWarn: boolean;
-  /** 反复点击"批量解析"提示弹窗 */
-  repeatClickWarn: boolean;
+  /** 导出任务失败警告弹窗（v1.1.4：未选中有效文件时弹窗，关闭后 toast；默认开） */
+  exportFailWarn: boolean;
+  /** 单文件解析失败警告弹窗（v1.1.4：解析失败提示刷新资源列表；默认开） */
+  parseFailWarn: boolean;
   /** CORS 拦截后是否自动跳转分享页（1.0.3：备用形式，默认关；开=自动跳分享页，退出本站自动清理新标签） */
   corsAutoJump: boolean;
 }
@@ -155,6 +188,12 @@ export interface Preferences {
   modals: ModalPrefs;
   /** 解析通道（1.1） */
   transport: TransportPrefs;
+  /**
+   * 资源复用窗口（小时，v1.1.4）：0 = 不复用。
+   * - ls 复用：窗口内从历史/足迹再进同一分享，直接复用缓存目录树 + stoken，不重新拉取；
+   * - prase 复用：窗口内已解析成功的文件复用之前的 oss+sig（download 直链），不再请求接口。
+   */
+  reuseWindowHours: number;
   /** 足迹偏好 */
   footprint: FootprintPrefs;
 }
@@ -179,7 +218,7 @@ export interface LinkRecord {
   note?: string;
 }
 
-/** 足迹：目录树快照（md 导出用） */
+/** 足迹：目录树快照（md 导出用；v1.1.4 起兼作 ls 复用缓存，含 stoken） */
 export interface TreeSnapshot {
   /** 分享 ID（主键） */
   shareId: string;
@@ -189,12 +228,14 @@ export interface TreeSnapshot {
   adapterId: string;
   /** 序列化目录树（根节点） */
   root: TreeNode;
-  /** 快照时间 ms */
+  /** 快照时间 ms（= ls 完成时间） */
   savedAt: number;
   /** 文件总数 */
   fileCount: number;
   /** 总大小字节 */
   totalSize: number;
+  /** 分享访问令牌（v1.1.4：复用快照直接 prase 用；旧快照无此字段 = 不可复用） */
+  stoken?: string;
 }
 
 /** 足迹：解析记录（在目录树呈现：时间/次数/是否成功，默认斜体） */
@@ -289,6 +330,9 @@ export interface LinkFetchContext {
 /**
  * 一次解析的完整上下文（HomePage 产出 → ResultPage 消费）
  * 仅引用 PanAdapter 抽象接口，不依赖具体网盘。
+ *
+ * v1.1.4 术语修正：parsedAt 实为「资源列表获取时间」（ls 完成时间），
+ * 与「解析下载方式」（prase）无关 —— 结果页展示用「资源列表获取于」文案。
  */
 export interface ParseSession {
   /** 识别到的适配器（registry 分发） */
@@ -301,6 +345,6 @@ export interface ParseSession {
   stoken: string;
   /** 目录树（buildTree 产物） */
   root: TreeNode;
-  /** 解析完成时间 ms */
+  /** 资源列表获取时间（ls 完成时间）ms */
   parsedAt: number;
 }

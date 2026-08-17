@@ -40,7 +40,8 @@ export const DEFAULTS: Preferences = {
     loginJump: true,
     autoCloseTab: true,
     batchWarn: true,
-    repeatClickWarn: true,
+    exportFailWarn: true, // v1.1.4：导出任务失败警告弹窗（默认开）
+    parseFailWarn: true, // v1.1.4：单文件解析失败警告弹窗（默认开）
     corsAutoJump: false, // CORS 拦截默认弹窗提示（1.0.3：自动跳转改为"备用"，默认关；开=自动跳分享页）
   },
   transport: {
@@ -48,6 +49,8 @@ export const DEFAULTS: Preferences = {
     proxyUrl: '', // 用户填写的 API 转发代理地址（最好是自己的）
     proxyToken: '', // 代理访问令牌（部署时配置的 PROXY_TOKEN；代理未设 token 时可留空）
   },
+  /** v1.1.4：资源复用窗口（小时）；0 = 不复用 */
+  reuseWindowHours: 1,
   footprint: {
     keepLinks: true,
     keepTrees: true,

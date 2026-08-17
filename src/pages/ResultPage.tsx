@@ -1,8 +1,10 @@
 /**
  * 结果页（docs/STRUCTURE.md：src/pages/ResultPage.tsx）—— 核心页
  *
- * 目录树 + 勾选 → 批量直链（15/批 + 1s 节流）→ 导出（aria2/gopeed/curl / 浏览器直下）
+ * 目录树 + 勾选 → prase 批量直链（15/批 + 1s 节流，窗口内复用已解析直链）→ 导出。
  * 附带：直链有效期倒计时（OSS Expires 参数）、失败重试、足迹记录/日志、md 导出。
+ * v1.1.4：术语分离 —— ls（资源列表获取）与 prase（解析下载方式）分开；
+ * 头部「资源列表获取于 xx」+ 绿按钮「获取最新资源列表」强制刷新 ls。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
@@ -13,18 +15,21 @@ import { FileCheckbox } from '../components/FileCheckbox';
 import { BatchWarnModal } from '../components/BatchWarnModal';
 import { CookieWarnModal } from '../components/CookieWarnModal';
 import { DownloaderModal } from '../components/DownloaderModal';
-import { RepeatClickHint } from '../components/RepeatClickHint';
+import { ExportFailModal } from '../components/ExportFailModal';
+import { ParseFailModal } from '../components/ParseFailModal';
 import { useToast } from '../components/Toast';
 import { fetchLinks } from '../core/linkFetcher';
+import { fetchListSnapshot, renderTreeText, hhmmss } from '../core/listFetcher';
 import { getPreferences } from '../core/preferences';
 import { addRecord } from '../core/footprint/records';
 import { appendLog, listLogs, exportLogsMd } from '../core/footprint/logs';
 import { addGlobalLog } from '../core/footprint/globalLog';
+import { saveTree } from '../core/footprint/trees';
 import { getPugs } from '../adapters/ucPugs';
 import { exportTask, exportTreeMd } from '../tasks/export';
 import { loadDownloaderConfig } from '../utils/downloader';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
-import type { ExportFile, ParseSession, TaskKind, TreeNode } from '../core/types';
+import type { ExportFile, LinkResult, ParseSession, TaskKind, TreeNode } from '../core/types';
 import { linkAbbr } from './HomePage';
 
 /** 直链结果（含获取时间，用于倒计时） */
@@ -67,11 +72,17 @@ export interface ResultPageProps {
 const KIND_LABEL: Record<TaskKind, string> = { aria2: 'aria2', gopeed: 'Gopeed', curl: 'cURL' };
 
 export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
-  const { adapter, shareId, stoken, url, root, parsedAt } = session;
+  const { adapter, shareId, url } = session;
   const { toast } = useToast();
 
   const prefs = useMemo(() => getPreferences(), []);
   const downloader = useMemo(() => loadDownloaderConfig(), []);
+
+  // v1.1.4：资源列表（ls）在结果页可刷新 —— 目录树/stoken/获取时间改为本地状态
+  const [root, setRoot] = useState<TreeNode>(session.root);
+  const [stoken, setStoken] = useState(session.stoken);
+  const [listAt, setListAt] = useState(session.parsedAt);
+  const [refreshingList, setRefreshingList] = useState(false);
 
   // 全部叶子文件（一次计算，树固定）
   const allLeaves = useMemo(() => collectLeaves(root), [root]);
@@ -96,13 +107,13 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
   const [exportKind, setExportKind] = useState<TaskKind>('aria2');
   const [keepStructure, setKeepStructure] = useState(prefs.keepStructure);
   const [batchWarn, setBatchWarn] = useState<TaskKind | null>(null);
-  const [repeatHint, setRepeatHint] = useState(false);
+  const [exportFail, setExportFail] = useState(false);
+  const [parseFail, setParseFail] = useState<{ fileName: string } | null>(null);
   const [downloaderOpen, setDownloaderOpen] = useState(false);
-  // §12 顺序固化：解析（获取下载链接）阶段才需要 cookie —— 弹窗确认后预热 + 继续
+  // §12 顺序固化：prase（解析下载方式）阶段才需要 cookie —— 弹窗确认后预热 + 继续
   const [cookieWarn, setCookieWarn] = useState<{ files: ShareFile[] } | null>(null);
   const pendingFetch = useRef<ShareFile[] | null>(null);
   const [, setTick] = useState(0); // 倒计时刷新
-  const batchClickAt = useRef<number[]>([]);
 
   // 倒计时：链接存在时每 30s 刷新
   useEffect(() => {
@@ -177,10 +188,11 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
     });
   };
 
-  /* ---------- 批量直链 ---------- */
+  /* ---------- 批量直链（prase：解析下载方式） ---------- */
   /**
-   * 解析入口（§12 顺序固化：ls 不需要 cookie，解析才需要）：
+   * prase 入口（§12 顺序固化：ls 不需要 cookie，prase 才需要）：
    * 需 cookie 的网盘（UC）→ 先弹窗展示捕获状态（明文，默认开），确认后拉直链。
+   * v1.1.4：窗口内已解析且未过期的文件直接复用（oss+sig），全部命中时跳过 cookie 弹窗。
    * 不做“跳转取 cookie”预热 —— §12 实测：oss 直链与 __pugs 必须同响应绑定，
    * 跨环境取值无意义（跳转只影响浏览器 jar，与导出链路无关）。
    */
@@ -191,38 +203,75 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
     }
     if (fetching) return;
     pendingFetch.current = files;
-    if (adapter.cookie && getPreferences().modals.cookieWarn) {
-      addGlobalLog('=====开始收集必要信息=====');
-      addGlobalLog(`获取cookie：弹窗已出现，等待用户选择（当前捕获 ${getPugs() ? '有值' : '为空'}，解析后代理捕获自动更新）`);
+    addGlobalLog('=====解析下载方式（prase）=====');
+    addGlobalLog(`prase：选中 ${files.length} 个文件（窗口 ${prefs.reuseWindowHours}h 内已解析直链自动复用）`);
+    // 全部命中缓存直链 → 无需 cookie，直接走复用合并
+    if (files.every((f) => isReusable(f.fid))) {
+      addGlobalLog('prase：全部命中缓存直链，跳过 cookie 弹窗');
+      void doFetchLinks(files);
+      return;
+    }
+    if (adapter.cookie && prefs.modals.cookieWarn) {
+      addGlobalLog(`prase：需要 ${adapter.cookie.displayName} —— 弹窗已出现，等待用户选择（当前捕获 ${getPugs() ? '有值' : '为空'}，解析后代理捕获自动更新）`);
       setCookieWarn({ files });
       return;
     }
     void doFetchLinks(files);
   };
 
-  /** 真正执行批量直链获取（每个下载响应下发的 __pugs 与该响应的直链绑定，§12） */
+  /**
+   * 是否可复用缓存直链（v1.1.4）：已有成功直链 + 在 reuseWindowHours 窗口内 + oss 未过期。
+   * 过期判定：URL 带 Expires 时要求剩余时间 > 60s；无 Expires 参数只按窗口判定。
+   */
+  const isReusable = (fid: string): boolean => {
+    if (prefs.reuseWindowHours <= 0) return false;
+    const existing = links?.get(fid);
+    if (!existing?.ok || !existing.url) return false;
+    const age = Date.now() - existing.fetchedAt;
+    if (age >= prefs.reuseWindowHours * 3600_000) return false;
+    const exp = getExpiry(existing.url);
+    return exp === null || exp > Date.now() + 60_000;
+  };
+
+  /** 真正执行 prase（每个下载响应下发的 __pugs 与该响应的直链绑定，§12） */
   const doFetchLinks = async (files: ShareFile[]): Promise<void> => {
-    // 反复点击提示（同 10s 内第 3 次点击）
-    const now = Date.now();
-    batchClickAt.current = batchClickAt.current.filter((t) => now - t < 10_000);
-    batchClickAt.current.push(now);
-    if (batchClickAt.current.length >= 3 && fetching) {
-      setRepeatHint(true);
-      return;
-    }
     setFetching(true);
     setFetchProgress({ done: 0, total: files.length });
     try {
-      const results = await fetchLinks(
-        { adapter, shareId, stoken },
-        files,
-        { batchSize: 15, batchIntervalMs: 1000, continueOnError: true },
-      );
+      // ① 窗口内复用：未过期直链直接并入结果，不请求接口
+      const toFetch: ShareFile[] = [];
+      const reused = new Map<string, LinkEntry>();
+      for (const f of files) {
+        if (isReusable(f.fid)) {
+          reused.set(f.fid, links!.get(f.fid)!);
+        } else {
+          toFetch.push(f);
+        }
+      }
+      if (reused.size > 0) {
+        addGlobalLog(`prase：复用缓存直链 ${reused.size}/${files.length}（窗口内 oss+sig 未过期，不再请求接口）`);
+      }
+      // ② 新文件走接口（15/批 + 1s 节流）
+      let results: LinkResult[] = [];
+      if (toFetch.length > 0) {
+        addGlobalLog(`prase：发起接口请求 ${toFetch.length} 个（15/批 + 1s 节流）`);
+        results = await fetchLinks(
+          { adapter, shareId, stoken },
+          toFetch,
+          { batchSize: 15, batchIntervalMs: 1000, continueOnError: true },
+        );
+        addGlobalLog(`prase：接口完成 — ${results.filter((r) => r.ok).length}/${toFetch.length} 成功`);
+      }
       const map = new Map<string, LinkEntry>();
       let okCount = 0;
+      reused.forEach((entry, fid) => {
+        okCount++;
+        map.set(fid, entry);
+      });
       results.forEach((r, i) => {
+        const f = toFetch[i];
         if (r.ok) okCount++;
-        map.set(files[i].fid, {
+        map.set(f.fid, {
           ok: r.ok,
           url: r.url,
           error: r.error,
@@ -234,9 +283,9 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
       // 捕获状态反馈（弹窗已展示过，这里给个结果）：
       if (adapter.cookie) {
         const withCookie = [...map.values()].filter((l) => l.ok && l.cookie).length;
-        addGlobalLog(`merger：下载凭据已按文件绑定（${withCookie}/${map.size} 个链接携带同响应 __pugs）`);
+        addGlobalLog(`prase：下载凭据已按文件绑定（${withCookie}/${map.size} 个链接携带同响应 ${adapter.cookie.key}）`);
         if (withCookie === 0) {
-          addGlobalLog('merger：未捕获到 __pugs —— 请检查代理通道（x-pugs 头）是否可用，否则导出命令将缺下载凭据');
+          addGlobalLog(`prase：未捕获到 ${adapter.cookie.key} —— 请检查代理通道（x-pugs 头）是否可用，否则导出命令将缺下载凭据`);
         }
       }
       const abbr = linkAbbr(url, adapter.id);
@@ -255,15 +304,24 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
           level: okCount === files.length ? 'info' : 'debug',
           adapterId: adapter.id,
           url,
-          message: `批量解析：${abbr}，${okCount}/${files.length} 成功`,
+          message: `解析下载方式：${abbr}，${okCount}/${files.length} 成功（复用 ${reused.size}）`,
         });
       }
-      toast(
-        okCount === files.length
-          ? `解析完成：${okCount} 个文件全部成功`
-          : `部分失败：${okCount}/${files.length} 成功，可重试失败项`,
-        okCount === files.length ? 'success' : 'error',
-      );
+      // ③ 单文件解析失败 → 醒目弹窗（v1.1.4 规范：打开发 modal，关闭发 toast）
+      if (files.length === 1 && okCount === 0) {
+        if (prefs.modals.parseFailWarn) {
+          setParseFail({ fileName: files[0].fileName });
+        } else {
+          toast('解析失败，该文件可能已经与供应商断开连接或者在分享中被删除，请刷新资源列表后再试', 'error');
+        }
+      } else {
+        toast(
+          okCount === files.length
+            ? `解析完成：${okCount} 个文件全部成功`
+            : `部分失败：${okCount}/${files.length} 成功，可重试失败项`,
+          okCount === files.length ? 'success' : 'error',
+        );
+      }
     } catch (err) {
       toast(err instanceof Error ? err.message : '批量解析失败', 'error');
     } finally {
@@ -280,6 +338,65 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
     requestFetchLinks(failed);
   };
 
+  /* ---------- 刷新资源列表（ls，v1.1.4）：强制重拉目录树，作废全部直链 ---------- */
+  const refreshList = async (): Promise<void> => {
+    if (refreshingList) return;
+    setRefreshingList(true);
+    setFetchProgress({ done: 0, total: 1 });
+    addGlobalLog('=====获取资源列表（ls）=====');
+    addGlobalLog(`ls：手动刷新 — ${adapter.name} · ${linkAbbr(url, adapter.id)}`);
+    try {
+      const snap = await fetchListSnapshot(adapter, shareId, url, {
+        onProgress: (done, total) => setFetchProgress({ done, total }),
+      });
+      setRoot(snap.root);
+      setStoken(snap.stoken);
+      setListAt(snap.fetchedAt);
+      setLinks(null); // 映射可能变化（增删文件/令牌失效），全部作废重新解析
+      if (prefs.footprint.keepTrees) {
+        await saveTree({
+          shareId,
+          url,
+          adapterId: adapter.id,
+          root: snap.root,
+          savedAt: snap.fetchedAt,
+          fileCount: snap.fileCount,
+          totalSize: snap.totalSize,
+          stoken: snap.stoken,
+        });
+      }
+      await addRecord({
+        shareId,
+        url,
+        adapterId: adapter.id,
+        parsedAt: snap.fetchedAt,
+        ok: true,
+        fileCount: snap.fileCount,
+        title: snap.root.children?.[0]?.file.fileName,
+      });
+      if (prefs.footprint.keepLogs) {
+        await appendLog({
+          time: snap.fetchedAt,
+          level: 'info',
+          adapterId: adapter.id,
+          url,
+          message: `手动刷新资源列表：${linkAbbr(url, adapter.id)}，共 ${snap.fileCount} 个文件`,
+        });
+      }
+      // 目录树打印到全局日志（过长自动折叠）+ 刷新标记（v1.1.4 规范日志）
+      addGlobalLog(`=====目录树（${snap.fileCount} 个文件 / ${snap.totalSize} 字节）=====\n${renderTreeText(snap.root)}\n=====目录树结束=====`);
+      addGlobalLog(`=====资源列表已刷新，当前${hhmmss(snap.fetchedAt)}=====`);
+      toast('资源列表已刷新，直链已作废请重新解析', 'success');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      addGlobalLog(`ls：刷新失败 — ${message}`);
+      toast(`刷新失败：${message}（分享可能已失效）`, 'error');
+    } finally {
+      setRefreshingList(false);
+      setFetchProgress(null);
+    }
+  };
+
   /* ---------- 单文件解析（§12：原来“复制直链”的位置改成解析按钮） ---------- */
   const parseSingleFile = (fid: string): void => {
     const node = leafNodeOf(fid);
@@ -289,9 +406,12 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
     }
     const existing = links?.get(fid);
     if (existing?.ok && !fetching) {
-      // 已解析成功：直接提示可导出（避免重复请求）
-      toast('该文件已解析，勾选后可导出下载命令', 'info');
-      return;
+      // 已解析成功：窗口内未过期 → 直接提示可导出（避免重复请求）；过期 → 重新解析
+      if (isReusable(fid)) {
+        toast('该文件已解析，勾选后可导出下载命令', 'info');
+        return;
+      }
+      addGlobalLog(`prase：${node.file.fileName} 缓存直链已过期（窗口 ${prefs.reuseWindowHours}h），重新请求接口`);
     }
     requestFetchLinks([node.file]);
   };
@@ -326,20 +446,28 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
     doExport(kind);
   };
 
+  const EXPORT_FAIL_MSG = '未选中任何文件或者选中部分含有未解析、已解析但过期的文件';
+
   const doExport = (kind: TaskKind): void => {
     const files = buildExportFiles(kind);
     if (files.length === 0) {
-      toast('请先勾选文件并批量解析', 'error');
+      // v1.1.4 规范：打开按钮发 modal（醒目），关闭发 toast
+      if (prefs.modals.exportFailWarn) {
+        addGlobalLog(`task：导出失败 — ${EXPORT_FAIL_MSG}`);
+        setExportFail(true);
+      } else {
+        toast(EXPORT_FAIL_MSG, 'error');
+      }
       return;
     }
-    addGlobalLog(`=====检测到task=====\ntask类型：${kind}（${files.length} 个文件）`);
-    addGlobalLog('merger：扫描暂存区，搜索 dl-link 与必要 cookie');
+    addGlobalLog(`=====导出任务（task）=====\ntask：类型 ${kind} · ${files.length} 个文件${kind === 'curl' ? '' : keepStructure ? '（保留目录结构）' : ''}`);
+    addGlobalLog('task：扫描已解析文件，按文件注入同响应下载凭据（__pugs）');
     const { fileName, content } = exportTask(kind, files, {
       keepStructure: kind === 'curl' ? false : keepStructure,
       outDir: downloader.savePath || undefined,
     });
     downloadFile(fileName, content);
-    addGlobalLog(`merger：合并完成，已导出 ${fileName}（下载命令已就绪）`);
+    addGlobalLog(`task：合并完成，已生成 ${fileName}（下载命令已就绪）`);
     toast(`已导出 ${fileName}`, 'success');
   };
 
@@ -382,9 +510,18 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
                 {remain !== null && remain < 0 && '（已过期，请重新解析）'}
               </span>
             )}
-            <span className="field-hint">解析于 {formatTime(parsedAt)}</span>
+            <span className="field-hint">资源列表获取于 {formatTime(listAt)}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn btn-emerald-soft btn-sm"
+              onClick={() => void refreshList()}
+              disabled={refreshingList || fetching}
+              title="重新拉取目录树（作废全部已解析直链）"
+            >
+              {refreshingList ? `刷新中 ${fetchProgress?.done ?? 0}/${fetchProgress?.total ?? 0}` : '获取最新资源列表'}
+            </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={exportTreeMdFile} title="导出目录树 md">
               导出目录树
             </button>
@@ -398,7 +535,7 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
               type="button"
               className="btn btn-primary btn-sm"
               onClick={() => requestFetchLinks(selectedFiles)}
-              disabled={fetching}
+              disabled={fetching || refreshingList}
             >
               {fetching ? `解析中 ${fetchProgress?.done ?? 0}/${fetchProgress?.total ?? 0}` : '批量获取下载链接'}
             </button>
@@ -500,7 +637,28 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
           }}
         />
       )}
-      {repeatHint && <RepeatClickHint onClose={() => setRepeatHint(false)} />}
+      {exportFail && (
+        <ExportFailModal
+          onClose={() => {
+            setExportFail(false);
+            // 关闭发 toast（v1.1.4 规范：打开按钮发 modal，关闭发 toast）
+            toast(EXPORT_FAIL_MSG, 'error');
+          }}
+        />
+      )}
+      {parseFail && (
+        <ParseFailModal
+          fileName={parseFail.fileName}
+          onClose={() => {
+            setParseFail(null);
+            toast('解析失败，该文件可能已经与供应商断开连接或者在分享中被删除，请刷新资源列表后再试', 'error');
+          }}
+          onRefresh={() => {
+            setParseFail(null);
+            void refreshList();
+          }}
+        />
+      )}
       {downloaderOpen && <DownloaderModal onClose={() => setDownloaderOpen(false)} />}
       {cookieWarn && adapter.cookie && (
         <CookieWarnModal
@@ -509,12 +667,12 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
           capturedValue={getPugs() ?? ''}
           onCancel={() => {
             setCookieWarn(null);
-            addGlobalLog('获取cookie：用户选择“算了吧”（跳过展示，继续解析）');
+            addGlobalLog('prase：用户选择“算了吧”（跳过 cookie 展示，继续解析）');
             void doFetchLinks(pendingFetch.current ?? []);
           }}
           onConfirm={() => {
             setCookieWarn(null);
-            addGlobalLog('获取cookie：用户已确认，继续解析');
+            addGlobalLog('prase：用户已确认，继续解析');
             void doFetchLinks(pendingFetch.current ?? []);
           }}
         />

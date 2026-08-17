@@ -53,12 +53,13 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
   };
 
   const modalRows: Array<{ key: keyof ModalPrefs; label: string; sub?: string }> = [
-    { key: 'cookieWarn', label: '读取 Cookie 警告弹窗', sub: '接入需要 Cookie 的网盘时生效（UC 下载需 __pugs，默认开）' },
+    { key: 'cookieWarn', label: '读取 Cookie 警告弹窗' },
     { key: 'loginJump', label: '需要登录但未登录/过期 → 跳转提示弹窗' },
     { key: 'autoCloseTab', label: '自动关闭新标签页', sub: '只能关闭本站打开的标签' },
     { key: 'corsAutoJump', label: 'CORS 拦截后自动跳转', sub: '备用形式：跳分享页供书签解析，退出本站自动清理；默认关=先弹窗' },
     { key: 'batchWarn', label: '批量解析"仅支持 aria2/gopeed"弹窗' },
-    { key: 'repeatClickWarn', label: '反复点击"批量解析"提示弹窗' },
+    { key: 'exportFailWarn', label: '导出任务失败警告弹窗', sub: '未选中有效文件时弹出；关闭后以 toast 提示' },
+    { key: 'parseFailWarn', label: '单文件解析失败警告弹窗', sub: '解析失败提示刷新资源列表；关闭后以 toast 提示' },
   ];
 
   return (

@@ -98,6 +98,21 @@ export function DefaultMode({ prefs, onChange }: DefaultModeProps): JSX.Element 
       </div>
       <div className="switch-row">
         <div>
+          <div className="switch-label">资源复用窗口（小时）</div>
+          <div className="switch-sub">0 = 不复用；窗口内再进同一分享复用缓存目录树，已解析直链（oss+sig）不再重复请求</div>
+        </div>
+        <input
+          className="input"
+          type="number"
+          min={0}
+          max={24}
+          style={{ width: 90, padding: '6px 10px' }}
+          value={prefs.reuseWindowHours}
+          onChange={(e) => onChange({ reuseWindowHours: Math.max(0, Math.min(24, Number(e.target.value) || 0)) })}
+        />
+      </div>
+      <div className="switch-row">
+        <div>
           <div className="switch-label">目录树格式</div>
           <div className="switch-sub">参考 123 云盘，默认 |--- 模式</div>
         </div>
