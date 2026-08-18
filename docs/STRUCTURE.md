@@ -37,16 +37,15 @@ pan-web/
 │   │       ├── links.ts           #     已填链接（查重/时间/限制 100 条）
 │   │       ├── trees.ts           #     目录树快照（md 导出用）
 │   │       ├── records.ts         #     解析记录（时间/次数/成功与否）
-│   │       └── logs.ts            #     完整解析日志（独立存储/5MB 轮转/删除线 cookie）
+│   │       ├── logs.ts            #     完整解析日志（独立存储/5MB 轮转/删除线 cookie）
+│   │       └── prase.ts           #     直链结果按 fid 复用（shareId::fid，v1.1.5.3）
 │   │
 │   ├── components/                # UI 组件（纯展示，props 驱动）
 │   │   ├── LinkInput.tsx          #   输入框 + 自动识别网盘 + 历史下拉
 │   │   ├── DirectoryTree.tsx      #   目录树（两种模式：|--- / 缩进，默认 |---）
 │   │   ├── FileCheckbox.tsx       #   文件勾选（全选/按大小类型过滤）
-│   │   ├── BatchWarnModal.tsx     #   批量解析提示弹窗（仅 aria2/gopeed）
 │   │   ├── CookieWarnModal.tsx    #   读取 cookie 警告弹窗（一次性确认）
 │   │   ├── LoginJumpModal.tsx     #   需要登录 → 跳转提示 + 自动关标签选项
-│   │   ├── RepeatClickHint.tsx    #   反复点击"批量解析"的提示
 │   │   └── settings/              #   偏好设置面板（按设计稿三块：UAC/默认方式/足迹）
 │   │       ├── UacTable.tsx       #     网盘 × 转存/登录/限速 配置表
 │   │       ├── DefaultMode.tsx    #     单文件/同目录/跨目录 默认下载方式

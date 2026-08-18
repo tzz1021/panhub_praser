@@ -116,6 +116,8 @@ export interface PanLimits {
   batchOnlyAriaGopeed: boolean;
   /** 游客大小限制说明（如 UC "4G 文件都不需要，临界未知"） */
   sizeLimitNote?: string;
+  /** oss/sig 较小有效期说明（如 UC "约 3h（直链 3-6h / __pugs 3h，实测）"；未知不填显示 —） */
+  linkExpiryNote?: string;
 }
 
 /**
@@ -132,6 +134,8 @@ export interface CookieRequirement {
   displayName: string;
   /** 未捕获到值时的供应商专属排查话术 */
   missingHint: string;
+  /** 标准长度（v1.1.5：弹窗展示「标准长度 xxx」供用户核对；未知可不填） */
+  standardLength?: number;
 }
 
 export interface PanAdapter {

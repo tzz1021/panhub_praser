@@ -39,7 +39,6 @@ export const DEFAULTS: Preferences = {
     cookieWarn: true, // §10：下载层需 __pugs（游客态），解析时弹窗预热；可关
     loginJump: true,
     autoCloseTab: true,
-    batchWarn: true,
     exportFailWarn: true, // v1.1.4：导出任务失败警告弹窗（默认开）
     parseFailWarn: true, // v1.1.4：单文件解析失败警告弹窗（默认开）
     corsAutoJump: false, // CORS 拦截默认弹窗提示（1.0.3：自动跳转改为"备用"，默认关；开=自动跳分享页）

@@ -14,7 +14,7 @@ import { DownloaderModal } from '../components/DownloaderModal';
 import { LoginJumpModal } from '../components/LoginJumpModal';
 import { CorsJumpModal } from '../components/CorsJumpModal';
 import { useToast } from '../components/Toast';
-import { fetchListSnapshot, renderTreeText, hhmmss, countFiles } from '../core/listFetcher';
+import { fetchListSnapshot, renderTreeText, hhmmss } from '../core/listFetcher';
 import { classifyError, isCorsError } from '../core/errors';
 import { getPreferences } from '../core/preferences';
 import { addGlobalLog } from '../core/footprint/globalLog';
@@ -110,14 +110,14 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       toast('识别失败，请检查格式是否正确', 'error');
       return;
     }
-    // §12/顺序固化：获取资源列表（ls）= 游客态浏览（不需要 cookie），直接解析目录树；
+    // §12/顺序固化：获取资源列表（scanner，原 ls 术语）= 游客态浏览（不需要 cookie），直接解析目录树；
     // cookie（UC __pugs）只在结果页“解析下载方式”（prase）阶段才需要
-    addGlobalLog('=====获取资源列表（ls）=====');
+    addGlobalLog('=====获取资源列表（scanner）=====');
     await runParse(adapter, shareUrl, pc);
   };
 
   /**
-   * 获取资源列表（ls）：优先复用缓存快照（reuseWindowHours 窗口内，v1.1.4），
+   * 获取资源列表（scanner，原 ls 术语）：优先复用缓存快照（reuseWindowHours 窗口内，v1.1.4），
    * 未命中/过期才走 getToken + 目录树遍历（游客态请求，不需要 cookie，§12）。
    */
   const runParse = async (adapter: PanAdapter, shareUrl: string, pc: string): Promise<void> => {
@@ -128,23 +128,23 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
     }
     const prefs = getPreferences();
     const abbr = linkAbbr(shareUrl, adapter.id);
-    addGlobalLog(`ls：供应商 ${adapter.name} · 分享 ${abbr}`);
+    addGlobalLog(`scanner：供应商 ${adapter.name} · 分享 ${abbr}`);
     if (adapter.cookie) {
-      addGlobalLog(`ls：${adapter.cookie.displayName}（未登录态cookie）在 prase 阶段才需要，本阶段不涉及`);
+      addGlobalLog(`scanner：${adapter.cookie.displayName}（未登录态cookie）在 prase 阶段才需要，本阶段不涉及`);
     }
-    addGlobalLog(`ls：复用窗口 ${prefs.reuseWindowHours}h · cookie 提示 ${prefs.modals.cookieWarn ? '开启' : '关闭'} · 通道 ${prefs.transport.mode === 'proxy' ? 'proxy代理' : 'direct直连'}`);
+    addGlobalLog(`scanner：复用窗口 ${prefs.reuseWindowHours}h · cookie 提示 ${prefs.modals.cookieWarn ? '开启' : '关闭'} · 通道 ${prefs.transport.mode === 'proxy' ? 'proxy代理' : 'direct直连'}`);
     setBusy(true);
     setProgress({ done: 0, total: 1 });
     const now = Date.now();
     try {
-      // ① 快照复用：窗口内命中足迹缓存（目录树 + stoken）→ 跳过整轮 ls
+      // ① 快照复用：窗口内命中足迹缓存（目录树 + stoken）→ 跳过整轮 scanner
       const reuseWinMs = prefs.reuseWindowHours > 0 ? prefs.reuseWindowHours * 3600_000 : 0;
       let snap: ListSnapshot | null = null;
       if (reuseWinMs > 0 && prefs.footprint.keepTrees) {
         const cached = await getTree(shareId);
         if (cached?.stoken && now - cached.savedAt < reuseWinMs) {
           const mins = Math.max(1, Math.round((now - cached.savedAt) / 60000));
-          addGlobalLog(`ls：命中缓存资源列表（${mins} 分钟前，窗口 ${prefs.reuseWindowHours}h），复用目录树 + stoken，跳过遍历`);
+          addGlobalLog(`scanner：命中缓存资源列表（${mins} 分钟前，窗口 ${prefs.reuseWindowHours}h），复用目录树 + stoken，跳过遍历`);
           snap = {
             shareId,
             url: shareUrl,
@@ -156,12 +156,12 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
             totalSize: cached.totalSize,
           };
         } else if (cached) {
-          addGlobalLog(`ls：缓存快照过期或缺少 stoken（${Math.round((now - cached.savedAt) / 60000)} 分钟前），重新拉取`);
+          addGlobalLog(`scanner：缓存快照过期或缺少 stoken（${Math.round((now - cached.savedAt) / 60000)} 分钟前），重新拉取`);
         }
       }
-      // ② 未命中：完整 ls（token 校验 + 目录树递归）
+      // ② 未命中：完整 scanner（token 校验 + 目录树递归）
       if (!snap) {
-        addGlobalLog('ls：开始拉取目录树（并发 3，分页 50/页）…');
+        addGlobalLog('scanner：开始拉取目录树（并发 3，分页 50/页）…');
         snap = await fetchListSnapshot(adapter, shareId, shareUrl, {
           passcode: pc,
           onProgress: (done, total) => setProgress({ done, total }),
@@ -199,7 +199,7 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
         await appendLog({ time: snap.fetchedAt, level: 'info', adapterId: adapter.id, url: shareUrl, message: `获取资源列表成功：${abbr}，共 ${snap.fileCount} 个文件（${snap.totalSize} 字节）` });
       }
       onParsed({ adapter, url: shareUrl, shareId, stoken: snap.stoken, root: snap.root, parsedAt: snap.fetchedAt });
-      addGlobalLog(`ls：已就绪 — ${snap.fileCount} 个文件可勾选，解析下载方式（prase）在结果页进行`);
+      addGlobalLog(`scanner：已就绪 — ${snap.fileCount} 个文件可勾选，解析下载方式（prase）在结果页进行`);
     } catch (err) {
       const { category, message } = classifyError(err);
       const now = Date.now();

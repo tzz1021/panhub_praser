@@ -1,25 +1,27 @@
 /**
  * 足迹系统 IndexedDB 层（docs/STRUCTURE.md：src/core/footprint/db.ts）
  *
- * 库名 'pan-web-footprint'（版本 1）；仅存本地，见 HANDOFF §3.2 第 4 条。
- * 四个 store：
+ * 库名 'pan-web-footprint'（版本 2）；仅存本地，见 HANDOFF §3.2 第 4 条。
+ * 五个 store：
  *   - 'links'    keyPath 'url'，索引 lastUsedAt（已填链接查重/历史）
  *   - 'trees'    keyPath 'shareId'（目录树快照，md 导出用；同 shareId 覆盖）
  *   - 'records'  keyPath 'id' autoIncrement，索引 parsedAt（解析记录）
  *   - 'logs'     keyPath 'id' autoIncrement，索引 time（完整日志，5MB 轮转）
+ *   - 'prase'    keyPath 'key'（shareId::fid），索引 shareId（直链结果按 fid 复用，v1.1.5.3）
  * 零第三方依赖：全部为手写 Promise 包装的 IDB 工具（get/put/add/delete/getAll/clear + 索引游标/批量删）。
  */
 
 /** 数据库名 */
 export const DB_NAME = 'pan-web-footprint';
 /** 数据库版本（schema 变更时 +1 并在 onupgradeneeded 里做迁移） */
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 /** store 名常量（各模块/测试复用，避免魔法字符串） */
 export const STORE_LINKS = 'links';
 export const STORE_TREES = 'trees';
 export const STORE_RECORDS = 'records';
 export const STORE_LOGS = 'logs';
+export const STORE_PRASE = 'prase';
 
 /** 打开（必要时创建/迁移）足迹库 */
 export function openFootprintDb(): Promise<IDBDatabase> {
@@ -41,6 +43,11 @@ export function openFootprintDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_LOGS)) {
         const store = db.createObjectStore(STORE_LOGS, { keyPath: 'id', autoIncrement: true });
         store.createIndex('time', 'time'); // 日志按时间排序（轮转删最旧）
+      }
+      // v1.1.5.3：直链结果按 fid 复用（shareId::fid 主键，shareId 索引批量读）
+      if (!db.objectStoreNames.contains(STORE_PRASE)) {
+        const store = db.createObjectStore(STORE_PRASE, { keyPath: 'key' });
+        store.createIndex('shareId', 'shareId');
       }
     };
     req.onsuccess = () => resolve(req.result);

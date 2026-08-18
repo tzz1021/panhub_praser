@@ -7,8 +7,9 @@
  */
 import type { JSX } from 'react';
 import type { ShareFile } from '../adapters/types';
-import type { TreeNode } from '../core/types';
+import type { LinkEntry, TreeNode } from '../core/types';
 import { formatSize, formatTime } from '../utils/format';
+import { linkDetailOf, type LinkDetail, type LinkStatusKind } from '../utils/linkStatus';
 
 /** 树节点扁平行（ResultPage 预计算：按展开状态拍平 + 缩进） */
 export interface TreeRow {
@@ -22,8 +23,10 @@ export interface DirectoryTreeProps {
   expanded: ReadonlySet<string>;
   /** 已勾选的文件 fid 集合 */
   checked: ReadonlySet<string>;
-  /** fid → 直链结果（批量解析后） */
-  links: ReadonlyMap<string, { ok: boolean; url: string }>;
+  /** fid → 直链结果（批量解析后；含获取时间/终止标记，v1.1.5） */
+  links: ReadonlyMap<string, LinkEntry>;
+  /** 复用窗口小时（直链新鲜/过期判定，与设置一致） */
+  reuseWindowHours: number;
   onToggleDir: (fid: string) => void;
   onToggleFile: (fid: string) => void;
   onToggleDirAll: (node: TreeNode) => void;
@@ -42,6 +45,7 @@ export function DirectoryTree({
   onToggleDirAll,
   onParseFile,
   busy,
+  reuseWindowHours,
 }: DirectoryTreeProps): JSX.Element {
   if (rows.length === 0) {
     return (
@@ -68,8 +72,12 @@ export function DirectoryTree({
             const f = node.file;
             const isDir = Boolean(f.dir);
             const link = links.get(f.fid);
+            const detail: LinkDetail = linkDetailOf(link, reuseWindowHours, f.size);
+            const status: LinkStatusKind = detail.kind === 'green' ? 'green' : detail.kind === 'yellow' ? 'yellow' : detail.kind === 'failed' || detail.kind === 'terminated' ? 'red' : 'white';
+            const rowClass =
+              status === 'green' ? 'file-row--green' : status === 'yellow' ? 'file-row--yellow' : status === 'red' ? 'file-row--red' : '';
             return (
-              <tr key={f.fid}>
+              <tr key={f.fid} className={rowClass}>
                 <td className="col-name">
                   <div className="tree-row">
                     {depth > 0 && <span className="tree-spacer">{'\u00A0'.repeat((depth - 1) * 4)}├─ </span>}
@@ -95,26 +103,49 @@ export function DirectoryTree({
                 <td className="col-num">{formatSize(node.size)}</td>
                 <td className="col-num">{formatTime(f.modifiedAt)}</td>
                 <td className="col-action">
-                  {!isDir && link?.ok && (
-                    <span className="field-hint" style={{ color: 'var(--ok, #28a745)' }} title="浏览器直连被 UC referer 白名单拒绝，请用导出命令下载（reverse-notes-uc.md §10）">
-                      用导出命令下载
-                    </span>
-                  )}
-                  {!isDir && link && !link.ok && (
-                    <span className="field-hint" style={{ color: 'var(--danger)', marginRight: 6 }}>
-                      {link.url || '失败'}
-                    </span>
-                  )}
-                  {/* §12 单文件解析：无直链（含失败）时提供解析/重试按钮 */}
-                  {!isDir && onParseFile && (!link || !link.ok) && (
+                  {/* v1.1.5.3：移除每行 status:xxx 文本（保留四色行底色 + 状态按钮） */}
+                  {!isDir && detail.kind === 'failed' && onParseFile && (
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
                       onClick={() => onParseFile(f.fid)}
                       disabled={busy}
-                      title={link ? '重新解析该文件' : '解析该文件（需 cookie 的网盘会先弹窗）'}
+                      title="网络等不可抗拒因素导致失败，点击重试"
                     >
-                      {link ? '重试' : '解析'}
+                      重试
+                    </button>
+                  )}
+                  {!isDir && detail.kind === 'expired' && onParseFile && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onParseFile(f.fid)}
+                      disabled={busy}
+                      title="直链已过期，一键续杯（重新获取下载链接）"
+                    >
+                      一键续杯
+                    </button>
+                  )}
+                  {!isDir && detail.kind === 'terminated' && onParseFile && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onParseFile(f.fid)}
+                      disabled={busy}
+                      title="上次手动终止，重新解析该文件"
+                    >
+                      重新解析
+                    </button>
+                  )}
+                  {!isDir && detail.kind === 'none' && onParseFile && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onParseFile(f.fid)}
+                      disabled={busy}
+                      title="解析该文件（需 cookie 的网盘会先弹窗）"
+                    >
+                      解析
                     </button>
                   )}
                 </td>

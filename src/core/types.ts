@@ -10,7 +10,7 @@
 
 import type { PanAdapter, ShareFile, Stoken } from '../adapters/types';
 
-/* ============================== 资源列表快照（ls） ============================== */
+/* ============================== 资源列表快照（scanner，原 ls） ============================== */
 
 /**
  * 资源列表快照（ls 产物）：一次「获取资源列表」的完整结果。
@@ -110,8 +110,6 @@ export interface ModalPrefs {
   loginJump: boolean;
   /** 自动关闭新标签页（只能关自己打开的标签，见 HANDOFF §7） */
   autoCloseTab: boolean;
-  /** 批量解析"仅支持 aria2/gopeed"弹窗 */
-  batchWarn: boolean;
   /** 导出任务失败警告弹窗（v1.1.4：未选中有效文件时弹窗，关闭后 toast；默认开） */
   exportFailWarn: boolean;
   /** 单文件解析失败警告弹窗（v1.1.4：解析失败提示刷新资源列表；默认开） */
@@ -276,6 +274,28 @@ export interface LogEntry {
   message: string;
 }
 
+/* ============================== 直链条目（prase 产物，结果页内存态） ============================== */
+
+/**
+ * 直链条目（结果页 links 状态元素，v1.1.5 起共享给 DirectoryTree/工具）。
+ * 只在内存中（页面刷新即失）；ls 快照落了 IndexedDB 可跨会话复用，oss+sig 不落库
+ * （敏感凭据 + 有效期短），刷新后重新 prase 即可。
+ */
+export interface LinkEntry {
+  /** 是否成功 */
+  ok: boolean;
+  /** OSS 签名直链（ok=false 时为空串） */
+  url: string;
+  /** 失败原因（ok=false 时） */
+  error?: string;
+  /** 获取时间 ms */
+  fetchedAt: number;
+  /** 与该直链同响应绑定的下载凭据（§12；UC = __pugs），导出按文件注入 */
+  cookie?: { key: string; value: string };
+  /** v1.1.5：cookie 弹窗选「算了吧」手动终止解析的时间戳（仅单文件解析会写） */
+  terminatedAt?: number;
+}
+
 /* ============================== 任务导出 ============================== */
 
 /** 导出入参：拍平的 {路径, 直链} 列表（tasks/export.ts 统一入口） */
@@ -288,6 +308,18 @@ export interface ExportFile {
   size?: number;
   /** 与该直链同响应绑定的下载凭据（§12；UC = __pugs），merger 按文件注入 */
   cookie?: { key: string; value: string };
+  /** 网盘文件 ID（v1.1.5.2：导出后按 fid 查状态做黄色提醒；任务生成器忽略） */
+  fid?: string;
+}
+
+/** 导出产物（v1.1.5：aria2 保留目录结构 = 命令 + input-file 两个文件） */
+export interface ExportResult {
+  /** 主文件名 */
+  fileName: string;
+  /** 主文件内容 */
+  content: string;
+  /** 附带文件（需与主文件一起导出，如 aria2 input-file） */
+  extraFiles?: Array<{ fileName: string; content: string }>;
 }
 
 /** 导出任务类型 */
@@ -295,7 +327,7 @@ export type TaskKind = 'aria2' | 'gopeed' | 'curl';
 
 /** 任务生成配置（tasks/*.ts） */
 export interface TaskOptions {
-  /** 保留原始目录结构（仅 aria2/gopeed 支持） */
+  /** 保留原始目录结构（aria2/gopeed/curl 均支持；curl 用 --create-dirs，v1.1.5） */
   keepStructure: boolean;
   /** 下载目录（绝对路径，用于 aria2/curl 的 -d/输出路径） */
   outDir?: string;

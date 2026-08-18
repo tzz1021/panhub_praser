@@ -946,3 +946,82 @@ input[type='checkbox'] {
   color: var(--danger);
   font-weight: 600;
 }
+
+/* ============ 全局日志（v1.1.5：逐条渲染 + 折叠块） ============ */
+.global-log-list {
+  max-height: 40vh;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--bg-code, rgba(0, 0, 0, 0.06));
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.global-log-entry {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 1px 0;
+}
+
+.global-log-time {
+  flex-shrink: 0;
+  color: var(--text-faint, #94a3b8);
+  font-family: monospace;
+  user-select: none;
+}
+
+.global-log-msg {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+}
+
+/* 折叠块（目录树/解析结果）：默认收起，点击展开；展开后内容限高滚动 */
+.log-tree {
+  flex: 1;
+  min-width: 0;
+}
+
+.log-tree summary {
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 600;
+  user-select: none;
+}
+
+.log-tree pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ============ v1.1.5.2：prase 状态行底色（绿=足够下载 / 黄=不够时间 / 红=失败含手动终止） ============ */
+.file-row--green {
+  background: rgba(40, 167, 69, 0.07);
+}
+
+.file-row--yellow {
+  background: rgba(212, 160, 23, 0.10);
+}
+
+.file-row--red {
+  background: rgba(220, 53, 69, 0.07);
+}
+
+/* warning toast（导出后提示直链可能不够时间） */
+.toast--warning {
+  background: rgba(212, 160, 23, 0.95);
+  color: #fff;
+}

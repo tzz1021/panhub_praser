@@ -8,6 +8,7 @@ import { clearLinks } from '../../core/footprint/links';
 import { clearTrees } from '../../core/footprint/trees';
 import { clearRecords } from '../../core/footprint/records';
 import { clearLogs } from '../../core/footprint/logs';
+import { clearAllPrase } from '../../core/footprint/prase';
 import { useToast } from '../Toast';
 import { Switch } from './UacTable';
 
@@ -24,6 +25,7 @@ export function FootprintOpts({ footprint, onChange }: FootprintOptsProps): JSX.
       .then(() => clearTrees())
       .then(() => clearRecords()) // 1.1：补上解析记录（旧版漏清，导致设置里"清除足迹"看似没用）
       .then(() => clearLogs())
+      .then(() => clearAllPrase()) // v1.1.5.3：直链结果（按 fid 复用）连带清理
       .then(() => toast('足迹已清空', 'success'));
   };
 

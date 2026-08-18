@@ -19,8 +19,10 @@ import { listTrees, removeTree, clearTrees } from '../core/footprint/trees';
 import { listAllRecords, removeRecordsByShareId, clearRecords } from '../core/footprint/records';
 import { listLogs, removeLogsByUrl, clearLogs, exportLogsMd } from '../core/footprint/logs';
 import { listGlobalLogs, clearGlobalLogs, type GlobalLogEntry } from '../core/footprint/globalLog';
+import { clearAllPrase, clearPraseByShareId } from '../core/footprint/prase';
 import type { LinkRecord, ParseRecord, TreeSnapshot } from '../core/types';
 import { formatTime } from '../utils/format';
+import { copyText } from '../utils/clipboard';
 import { linkAbbr } from './HomePage';
 
 /** 时间轴分组：同一链接的解析事件折叠为一条 */
@@ -146,6 +148,7 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
       removeTree(g.shareId),
       removeRecordsByShareId(g.shareId),
       removeLogsByUrl(g.url),
+      clearPraseByShareId(g.shareId), // v1.1.5.3：直链结果（按 fid 复用）连带清理
     ]);
     setGroups((prev) => prev.filter((x) => x.url !== g.url));
     toast('已删除该链接及其全部足迹', 'success');
@@ -153,7 +156,7 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
 
   /** 删除全部历史（链接/树/记录/日志全清，1.1） */
   const deleteAll = async (): Promise<void> => {
-    await Promise.all([clearLinks(), clearTrees(), clearRecords(), clearLogs()]);
+    await Promise.all([clearLinks(), clearTrees(), clearRecords(), clearLogs(), clearAllPrase()]);
     setGroups([]);
     toast('已清空全部历史', 'success');
   };
@@ -344,16 +347,34 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
                     const t = new Date(e.time);
                     const p = (n: number): string => String(n).padStart(2, '0');
                     const stamp = `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
-                    // 目录树条目（v1.1.4）：过长自动折叠，点击展开（检测 `=====目录树` 头）
-                    if (e.message.startsWith('=====目录树')) {
+                    // 折叠块（v1.1.4/1.1.5）：目录树 / 解析结果 —— 过长自动折叠，点击展开
+                    if (e.message.startsWith('=====目录树') || e.message.startsWith('=====解析结果')) {
+                      const isTree = e.message.startsWith('=====目录树');
                       const nl = e.message.indexOf('\n');
                       const header = nl > 0 ? e.message.slice(0, nl) : e.message;
-                      const body = nl > 0 ? e.message.slice(nl + 1).replace(/\n=====目录树结束=====$/, '') : '';
+                      const body = nl > 0 ? e.message.slice(nl + 1).replace(/\n=====(目录树|解析结果)结束=====$/, '') : '';
                       return (
                         <div className="global-log-entry" key={i}>
                           <span className="global-log-time">{stamp}</span>
                           <details className="log-tree">
-                            <summary>🌳 {header}（过长自动折叠，点击展开）</summary>
+                            {/* v1.1.5.3：折叠内容一键复制，方便直接贴给开发者分析 */}
+                            <summary>
+                              <span>{isTree ? '🌳' : '📄'} {header}（过长自动折叠，点击展开）</span>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{ marginLeft: 8, padding: '1px 8px' }}
+                                onClick={(ev) => {
+                                  ev.preventDefault();
+                                  ev.stopPropagation();
+                                  void copyText(body).then((ok) =>
+                                    toast(ok ? '已复制（含末尾结束标记）' : '复制失败（浏览器未授权剪贴板）', ok ? 'success' : 'error'),
+                                  );
+                                }}
+                              >
+                                复制
+                              </button>
+                            </summary>
                             <pre>{body}</pre>
                           </details>
                         </div>

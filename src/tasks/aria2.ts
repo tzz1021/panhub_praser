@@ -1,10 +1,10 @@
 /**
  * aria2 下载任务生成（docs/STRUCTURE.md：src/tasks/aria2.ts）
  *
- * 三种输出形态：
- * - generateAria2Command：命令行。keepStructure=false 每文件一条；=true 只出一条
- *   `aria2c --continue=true --input-file=pan-web-tasks.txt`，配套内容由
- *   generateAria2InputFile 生成（调用方按同名文件导出）。
+ * 两种输出形态（v1.1.5.2 起全部单文件，浏览器不拦连续下载）:
+ * - generateAria2Command：命令行。keepStructure=false 每文件一条平铺命令；
+ *   =true 每文件一条带 --dir="相对目录" 的命令（aria2 自动建目录），不再用 input-file
+ *   双文件方案（浏览器默认拦截连续下载两个文件，Tzz 反馈）。
  * - generateAria2Rpc：JSON-RPC 批量任务数组（method aria2.addUri）。
  *
  * 约定：
@@ -26,10 +26,11 @@ function fileNameOf(path: string): string {
   return i >= 0 ? path.slice(i + 1) : path;
 }
 
-/** 取 path 去掉文件名部分作为相对目录；根目录（无目录）返回空串 */
+/** 取 path 去掉文件名部分作为相对目录；根目录（无目录）返回空串。
+ * v1.1.5.3：开头 "/" 必须剔除 —— 树路径形如 "/dir1/sub/file.zip"，保留则 aria2 当作根目录绝对路径。 */
 function dirNameOf(path: string): string {
   const i = path.lastIndexOf('/');
-  return i > 0 ? path.slice(0, i) : '';
+  return i > 0 ? path.slice(0, i).replace(/^\/+/, '') : '';
 }
 
 /** shell 双引号串内转义：`"` → `\"`（仅用于文件名/目录，URL 不参与） */
@@ -53,22 +54,25 @@ function cookieHeaderArray(f: ExportFile): string[] {
 }
 
 /**
- * 生成 aria2 命令行（keepStructure=true 时为单条 input-file 命令）。
+ * 生成 aria2 命令行（v1.1.5.2：keepStructure 也输出单文件，每行一条完整命令）。
  *
  * 不保留结构：每文件一行
  *   aria2c --continue=true [--header="Cookie: __pugs=..."] --dir="<outDir>" --out="<文件名>" "<url>"
- * 保留结构：单行
- *   aria2c --continue=true --input-file=pan-web-tasks.txt
+ * 保留结构：每文件一行带相对目录（aria2 自动创建 --dir 目录）
+ *   aria2c --continue=true [--header="Cookie: __pugs=..."] --dir="dir1/sub" --out="a.zip" "<url>"
  */
 export function generateAria2Command(files: ExportFile[], options: TaskOptions): string {
-  if (options.keepStructure) {
-    // 目录结构写进 input-file（每文件 dir/out 选项），命令只留一条
-    return `aria2c --continue=true --input-file=${ARIA2_INPUT_FILE_NAME}`;
-  }
-  // 平铺到下载目录：outDir 未给时省略 --dir
-  const dirFlag = options.outDir ? ` --dir="${shellEscape(options.outDir)}"` : '';
+  const keep = options.keepStructure;
   return files
-    .map(f => `aria2c --continue=true${cookieHeader(f)}${dirFlag} --out="${shellEscape(fileNameOf(f.path))}" "${f.url}"`)
+    .map((f) => {
+      const dir = keep ? dirNameOf(f.path) : '';
+      const dirFlag = dir
+        ? ` --dir="${shellEscape(dir)}"` // 相对目录，aria2 自动创建
+        : options.outDir
+          ? ` --dir="${shellEscape(options.outDir)}"`
+          : '';
+      return `aria2c --continue=true${cookieHeader(f)}${dirFlag} --out="${shellEscape(fileNameOf(f.path))}" "${f.url}"`;
+    })
     .join('\n');
 }
 

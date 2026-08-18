@@ -26,7 +26,8 @@ export function ExportFailModal({ onClose }: ExportFailModalProps): JSX.Element 
             未选中任何文件或者选中部分含有未解析、已解析但过期的文件。
           </p>
           <p style={{ margin: '8px 0 0', fontSize: 12.5, color: 'var(--text-faint)' }}>
-            请先在目录树勾选文件并批量获取下载链接；直链过期时可点「获取最新资源列表」刷新后再解析。
+            请检查所选部分是否为空；显示【重新解析】的文件表明上次解析已过期，请重新解析；
+            若重新解析失败，请尝试刷新资源列表，这会清空所有暂存区的 oss 直链。
           </p>
         </div>
         <div className="modal-foot">

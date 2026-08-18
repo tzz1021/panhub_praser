@@ -8,7 +8,7 @@
  * 本文件只依赖 src/core/types.ts（HANDOFF §4：core 零网盘依赖，tasks 同理）。
  */
 
-import type { ExportFile, ParseRecord, TaskKind, TaskOptions, TreeNode, TreeDetailPrefs } from '../core/types';
+import type { ExportFile, ExportResult, ParseRecord, TaskKind, TaskOptions, TreeNode, TreeDetailPrefs } from '../core/types';
 import { generateAria2Command } from './aria2';
 import { generateGopeedJson } from './gopeed';
 import { generateCurlCommand } from './curl';
@@ -47,11 +47,11 @@ function fileNameOf(path: string): string {
 /**
  * 统一导出入口：按 kind 分发到对应生成器。
  *
- * fileName：aria2 → 'aria2-command.txt'（keepStructure=true 时为单条 input-file
- * 命令，配套 pan-web-tasks.txt 内容请另取 generateAria2InputFile）；
- * gopeed → 'gopeed-tasks.json'；curl → 'curl-commands.txt'（逐条拼接）。
+ * v1.1.5.2：全部单文件导出（aria2 保留结构 = 每行完整命令，不再双文件）。
+ * fileName：aria2 → 'aria2-command.txt'；gopeed → 'gopeed-tasks.json'；
+ * curl → 'curl-commands.txt'（逐条拼接，keepStructure 时带 --create-dirs）。
  */
-export function exportTask(kind: TaskKind, files: ExportFile[], options: TaskOptions): { fileName: string; content: string } {
+export function exportTask(kind: TaskKind, files: ExportFile[], options: TaskOptions): ExportResult {
   switch (kind) {
     case 'aria2':
       return { fileName: 'aria2-command.txt', content: generateAria2Command(files, options) };
@@ -60,7 +60,7 @@ export function exportTask(kind: TaskKind, files: ExportFile[], options: TaskOpt
     case 'curl':
       return {
         fileName: 'curl-commands.txt',
-        content: files.map(f => generateCurlCommand(f, { outDir: options.outDir })).join('\n'),
+        content: files.map((f) => generateCurlCommand(f, { outDir: options.outDir, keepStructure: options.keepStructure })).join('\n'),
       };
     default: {
       // 穷尽检查：TaskKind 新增类型时此处编译报错

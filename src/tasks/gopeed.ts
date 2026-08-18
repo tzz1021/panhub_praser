@@ -13,10 +13,11 @@
 
 import type { ExportFile, TaskOptions } from '../core/types';
 
-/** 取 path 去掉文件名部分作为相对目录；根目录（无目录）返回空串 */
+/** 取 path 去掉文件名部分作为相对目录；根目录（无目录）返回空串。
+ * v1.1.5.3：开头 "/" 必须剔除 —— 树路径形如 "/dir1/sub/file.zip"，保留则 Gopeed 当作根目录绝对路径。 */
 function dirNameOf(path: string): string {
   const i = path.lastIndexOf('/');
-  return i > 0 ? path.slice(0, i) : '';
+  return i > 0 ? path.slice(0, i).replace(/^\/+/, '') : '';
 }
 
 /** 取 path 最后一段作为文件名（"dir1/sub/file.zip" → "file.zip"） */

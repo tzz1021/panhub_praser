@@ -73,10 +73,22 @@ export function CookieWarnModal({ panName, cookie, capturedValue, onConfirm, onC
                 复制
               </button>
             )}
+            {/* v1.1.5：当前长度按钮，供用户自行核对（标准长度见下） */}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ flexShrink: 0, marginTop: -2 }}
+              disabled
+              title="当前捕获到的 cookie 值长度"
+            >
+              当前长度 {capturedValue.length}
+            </button>
           </div>
           {hasValue && (
             <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-faint)' }}>
-              完整值 {capturedValue.length} 字符 · 与直链同响应绑定（§12），导出命令已按文件注入各自的值。
+              该 cookie 叫做 {cookie.key}
+              {cookie.standardLength !== undefined && `，标准长度 ${cookie.standardLength}`}，
+              请自行核对后继续；你可以在设置中关闭该提示。
             </p>
           )}
           {!hasValue && (

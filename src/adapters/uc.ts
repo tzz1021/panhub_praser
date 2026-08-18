@@ -57,6 +57,7 @@ const UC_LIMITS: PanLimits = {
   noLoginNeeded: true,
   batchOnlyAriaGopeed: false,
   sizeLimitNote: '4G 文件都不需要，临界未知',
+  linkExpiryNote: '直链 3-6h/Cookie 3h',
 };
 
 /** 错误码 → 中文文案（reverse-notes §4 错误码映射表） */
@@ -279,6 +280,7 @@ export const ucAdapter: PanAdapter = {
   cookie: {
     key: '__pugs',
     displayName: '双下划线pugs',
+    standardLength: 208, // reverse-notes-uc.md §11.4 实测长度，弹窗核对用（v1.1.5）
     missingHint: '没有请检查你的杂鱼浏览器是不是开启了cookie存储限制或者无痕模式，开发者请检查插件比如AdGuard可能会拦截标签页开启',
   },
   detect,

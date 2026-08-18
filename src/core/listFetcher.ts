@@ -1,11 +1,11 @@
 /**
- * 资源列表获取（ls，v1.1.4 术语分离）
+ * 资源列表获取（scanner，原 ls 术语，v1.1.5.3 开发日志改名）
  *
  * 职责：一次「获取资源列表」= getToken（分享有效性校验）→ buildTree（目录树递归遍历）。
  * 产物为 ListSnapshot（stoken + 目录树 + 统计），可被复用（reuseWindowHours 窗口内）。
  *
  * 与 prase（解析下载方式，linkFetcher.ts）严格分开：
- * - ls：游客态浏览，不需要 cookie；慢（大宗链接数百文件 >1min），产物可缓存复用
+ * - scanner：游客态浏览，不需要 cookie；慢（大宗链接数百文件 >1min），产物可缓存复用
  * - prase：按文件打 download 接口取 oss+sig + 同响应 __pugs；快，窗口内复用已解析直链
  *
  * 目录树文本渲染（renderTreeText）供全局日志打印，UI 侧对过长树自动折叠。
@@ -35,7 +35,7 @@ export interface ListFetchOptions {
 }
 
 /**
- * 执行一次完整的资源列表获取（ls）。
+ * 执行一次完整的资源列表获取（scanner）。
  * @param adapter 适配器
  * @param shareId 分享 ID
  * @param url     分享链接（日志/快照用）

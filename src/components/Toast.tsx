@@ -5,7 +5,7 @@
 import { createContext, useCallback, useContext, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-type ToastType = 'info' | 'success' | 'error';
+type ToastType = 'info' | 'success' | 'error' | 'warning';
 
 interface ToastItem {
   id: number;
