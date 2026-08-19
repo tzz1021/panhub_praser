@@ -8,7 +8,7 @@
  *   registerAdapter(xxxAdapter);
  */
 import type { PanAdapter } from './types';
-import { ucAdapter } from './uc';
+import { ucAdapter } from './uc/registry';
 
 /** 已注册适配器（先注册者优先，同 id 重复注册忽略） */
 const adapters: PanAdapter[] = [];

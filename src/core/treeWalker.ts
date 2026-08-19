@@ -2,9 +2,12 @@
  * 目录树递归遍历（docs/STRUCTURE.md：src/core/treeWalker.ts）
  *
  * 职责：对任意 PanAdapter（core 零网盘依赖）做"单层 list → 递归建树"的通用遍历：
- * - 分页：ListResult.total（来自 metadata._total）> 已收集数时递增 page 继续拉
- * - 并发：同时最多 concurrency（默认 3）个 list 请求（手写小信号量）
+ * - 分页：ListResult.total（来自 metadata._total）> 已收集数时递增 page 继续拉，
+ *   同目录页间节流 pageIntervalMs（默认 250ms，v1.1.6 防风控）
+ * - 并发：同时最多 concurrency（默认 2，v1.1.6 从 3 降为 2）个 list 请求（手写小信号量）
  * - 聚合：目录 size = 子树递归聚合；aggregateSize=false 时目录 size 记 0 且不建 children
+ * - 根节点可替换（v1.1.6 jumper）：rootFile/rootPath/rootIsShareRoot 支持从分享内
+ *   某个文件夹开始扫描（风控 0B 文件夹二次获取）
  * - 容错：单个目录拉取失败 → 该目录 size 记 0、children 置 undefined，不中断整体
  *   （契约无错误字段，失败目录靠 size=0 + children=undefined 这一约定呈现，见 buildDir 注释）
  *
@@ -25,6 +28,14 @@ const ROOT_FILE: ShareFile = {
 
 /** 每页条数（与适配器 ListParams.size 默认一致） */
 const PAGE_SIZE = 50;
+
+/** 同目录翻页间隔（默认 250ms，v1.1.6 目录翻页节流防风控） */
+const DEFAULT_PAGE_INTERVAL_MS = 250;
+
+/** sleep（翻页节流用） */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * 手写小信号量：限制同时进行的 list 请求数，超过上限的调用排队等待。
@@ -81,6 +92,7 @@ async function listAll(
   sem: Semaphore,
   fid: string,
   isRoot: boolean,
+  pageIntervalMs: number,
 ): Promise<ShareFile[]> {
   const files: ShareFile[] = [];
   let page = 1;
@@ -101,6 +113,8 @@ async function listAll(
       break;
     }
     page++;
+    // v1.1.6 目录翻页节流：同目录页间 250ms，防大宗扫描风控
+    await sleep(pageIntervalMs);
   }
   return files;
 }
@@ -117,9 +131,14 @@ export async function buildTree(
 ): Promise<TreeNode> {
   const recursive = options?.recursive ?? true;
   const maxDepth = options?.maxDepth ?? 0; // 0 = 不限
-  const concurrency = Math.max(1, options?.concurrency ?? 3);
+  const concurrency = Math.max(1, options?.concurrency ?? 2); // v1.1.6：默认 2 防风控
+  const pageIntervalMs = Math.max(0, options?.pageIntervalMs ?? DEFAULT_PAGE_INTERVAL_MS);
   const aggregateSize = options?.aggregateSize ?? true;
   const onProgress = options?.onProgress;
+  // v1.1.6 jumper：根节点可替换为分享内某个文件夹（0B 文件夹二次获取）
+  const rootFile = options?.rootFile ?? ROOT_FILE;
+  const rootPath = options?.rootPath ?? '/';
+  const rootIsShareRoot = options?.rootIsShareRoot ?? true;
 
   // 是否递归展开子目录：recursive 与 aggregateSize 同时为 true 才遍历。
   // 不聚合目录大小时按契约"size 记 0 且不建 children"，可省掉整棵子目录遍历。
@@ -155,7 +174,7 @@ export async function buildTree(
     }
 
     try {
-      const entries = await listAll(ctx, sem, entry.fid, isRoot);
+      const entries = await listAll(ctx, sem, entry.fid, isRoot, pageIntervalMs);
       // 兄弟目录并发构建（list 并发由信号量限流），文件节点同步生成
       const childNodes: TreeNode[] = await Promise.all(
         entries.map((child) => {
@@ -185,5 +204,5 @@ export async function buildTree(
     return node;
   };
 
-  return buildDir(ROOT_FILE, '/', 0, true);
+  return buildDir(rootFile, rootPath, 0, rootIsShareRoot);
 }

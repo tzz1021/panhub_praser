@@ -34,6 +34,12 @@ export interface DirectoryTreeProps {
   onParseFile?: (fid: string) => void;
   /** 解析进行中（禁用按钮，防连点） */
   busy?: boolean;
+  /** 跳转文件夹回调（0B 文件夹二次获取，v1.1.6）；缺省不显示 */
+  onJumpToFolder?: (node: TreeNode) => void;
+  /** 显示属性：文件夹内部文件和子文件夹个数（v1.1.6） */
+  showDirProps?: boolean;
+  /** 文件夹属性统计（fid → {文件数, 子文件夹数}，父级预计算，避免逐行递归） */
+  dirProps?: ReadonlyMap<string, { files: number; dirs: number }>;
 }
 
 export function DirectoryTree({
@@ -46,6 +52,9 @@ export function DirectoryTree({
   onParseFile,
   busy,
   reuseWindowHours,
+  onJumpToFolder,
+  showDirProps,
+  dirProps,
 }: DirectoryTreeProps): JSX.Element {
   if (rows.length === 0) {
     return (
@@ -98,12 +107,29 @@ export function DirectoryTree({
                     <span className={`meta-tag ${isDir ? 'meta-tag--folder' : 'meta-tag--file'}`}>
                       {isDir ? 'folder' : 'file'}
                     </span>
+                    {/* v1.1.6 显示属性：文件夹内部文件和子文件夹个数（风控失败的 0B 文件夹无统计） */}
+                    {isDir && showDirProps && dirProps?.get(f.fid) && (
+                      <span className="field-hint" style={{ fontSize: 11.5, marginLeft: 2 }}>
+                        {dirProps.get(f.fid)!.files} 文件 · {dirProps.get(f.fid)!.dirs} 文件夹
+                      </span>
+                    )}
                   </div>
                 </td>
                 <td className="col-num">{formatSize(node.size)}</td>
                 <td className="col-num">{formatTime(f.modifiedAt)}</td>
                 <td className="col-action">
                   {/* v1.1.5.3：移除每行 status:xxx 文本（保留四色行底色 + 状态按钮） */}
+                  {/* v1.1.6：风控导致的 0B 文件夹（children=undefined 且 size=0）→ 转到此文件夹（二次获取） */}
+                  {isDir && node.children === undefined && node.size === 0 && onJumpToFolder && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onJumpToFolder(node)}
+                      title="风控导致该文件夹未能列出目录树，跳转后二次获取（新建相关联的链接任务）"
+                    >
+                      转到此文件夹
+                    </button>
+                  )}
                   {!isDir && detail.kind === 'failed' && onParseFile && (
                     <button
                       type="button"

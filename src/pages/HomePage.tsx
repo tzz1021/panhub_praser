@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import type { PanAdapter } from '../adapters/types';
+import type { ShareFile } from '../adapters/types';
 import { detectShareUrl } from '../adapters/registry';
 import { LinkInput, extractShare } from '../components/LinkInput';
 import { PanTable } from '../components/PanTable';
@@ -112,7 +113,14 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
     }
     // §12/顺序固化：获取资源列表（scanner，原 ls 术语）= 游客态浏览（不需要 cookie），直接解析目录树；
     // cookie（UC __pugs）只在结果页“解析下载方式”（prase）阶段才需要
-    addGlobalLog('=====获取资源列表（scanner）=====');
+    // v1.1.6 jumper：长链接（跳转链接）→ 二次获取分享内某文件夹，日志头不同
+    const jump = adapter.parseJumpUrl?.(shareUrl) ?? null;
+    if (jump) {
+      const path = '/' + jump.segments.map((s) => s.name).join('/');
+      addGlobalLog(`=====${hhmmss(Date.now())}，跳转到'${path}'=====`);
+    } else {
+      addGlobalLog('=====获取资源列表（scanner）=====');
+    }
     await runParse(adapter, shareUrl, pc);
   };
 
@@ -128,6 +136,11 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
     }
     const prefs = getPreferences();
     const abbr = linkAbbr(shareUrl, adapter.id);
+    // v1.1.6 jumper：长链接（跳转链接）→ 二次获取分享内某文件夹（0B 文件夹风控救回）
+    const jump = adapter.parseJumpUrl?.(shareUrl) ?? null;
+    if (jump) {
+      return runJumpParse(adapter, shareUrl, jump, pc);
+    }
     addGlobalLog(`scanner：供应商 ${adapter.name} · 分享 ${abbr}`);
     if (adapter.cookie) {
       addGlobalLog(`scanner：${adapter.cookie.displayName}（未登录态cookie）在 prase 阶段才需要，本阶段不涉及`);
@@ -161,7 +174,7 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       }
       // ② 未命中：完整 scanner（token 校验 + 目录树递归）
       if (!snap) {
-        addGlobalLog('scanner：开始拉取目录树（并发 3，分页 50/页）…');
+        addGlobalLog('scanner：开始拉取目录树（并发 2，分页 50/页，同目录翻页节流 250ms）…');
         snap = await fetchListSnapshot(adapter, shareId, shareUrl, {
           passcode: pc,
           onProgress: (done, total) => setProgress({ done, total }),
@@ -217,6 +230,106 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
           setCorsJump({ message });
         }
       } else if (category === 'need-login' && prefs.modals.loginJump) {
+        setLoginJump({ message });
+      } else {
+        toast(message, 'error');
+      }
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+
+  /**
+   * v1.1.6 jumper：长链接（跳转链接）二次获取分享内某文件夹的资源列表。
+   *
+   * 与普通 scanner 的区别：
+   * - stoken 从大宗 scanner 入库数据（足迹 trees 快照）获取，没有才调 token 接口
+   *   （detail 接口没有 stoken 全部 401）；
+   * - 根节点是目标文件夹（rootFile/rootPath/rootIsShareRoot=false，list 不带 banner/share 扩展字段）；
+   * - 不覆盖 trees 快照（子树的根不是分享根，复用会污染整棵目录树）；
+   * - 依旧一次性解析完毕，不使用懒加载（游客态批量 scanner 风控会集群出现）。
+   */
+  const runJumpParse = async (
+    adapter: PanAdapter,
+    shareUrl: string,
+    jump: { shareId: string; segments: Array<{ fid: string; name: string }> },
+    pc: string,
+  ): Promise<void> => {
+    const { shareId, segments } = jump;
+    const rootPath = '/' + segments.map((s) => s.name).join('/');
+    const folder = segments[segments.length - 1];
+    const prefs = getPreferences();
+    const abbr = linkAbbr(shareUrl, adapter.id);
+    const now = Date.now();
+    addGlobalLog(`${hhmmss(now)} jumper：扫描暂存区，寻找唯一标识符`);
+    addGlobalLog(`scanner：收到jumper任务'${adapter.id}-${shareId}'内部文件夹。开始拉取目录树（并发 2，分页 50/页，同目录翻页节流 250ms）…`);
+    setBusy(true);
+    setProgress({ done: 0, total: 1 });
+    try {
+      // stoken 从刚才完成的大宗 scanner 入库数据获取（没有这个 detail 全部 401）
+      let stoken = '';
+      if (prefs.footprint.keepTrees) {
+        const cached = await getTree(shareId);
+        stoken = cached?.stoken ?? '';
+      }
+      if (!stoken) {
+        addGlobalLog(`scanner：jumper 未命中缓存 stoken，调用 token 接口获取`);
+        ({ stoken } = await adapter.getToken({ shareId, passcode: pc }));
+      }
+      const rootFile: ShareFile = { fid: folder.fid, fileName: folder.name, dir: true, size: 0 };
+      const snap = await fetchListSnapshot(adapter, shareId, shareUrl, {
+        passcode: pc,
+        stoken, // 预置 stoken，跳过 token 接口（jumper 复用缓存）
+        rootFile,
+        rootPath,
+        rootIsShareRoot: false, // 文件夹不是分享根，不带 _fetch_banner/_fetch_share
+        onProgress: (done, total) => setProgress({ done, total }),
+      });
+      // 足迹落库：链接查重 + 解析记录 + 日志（不覆盖 trees 快照，见函数注释）
+      if (prefs.footprint.keepLinks) {
+        await addLink({ url: shareUrl, adapterId: adapter.id, shareId });
+      }
+      await addRecord({
+        shareId,
+        url: shareUrl,
+        adapterId: adapter.id,
+        parsedAt: snap.fetchedAt,
+        ok: true,
+        fileCount: snap.fileCount,
+        title: folder.name, // 标题 = 目标文件夹名（历史页不显示裸 URL）
+      });
+      if (prefs.footprint.keepLogs) {
+        await appendLog({ time: snap.fetchedAt, level: 'info', adapterId: adapter.id, url: shareUrl, message: `获取资源列表成功（jumper ${rootPath}）：${abbr}，共 ${snap.fileCount} 个文件（${snap.totalSize} 字节）` });
+      }
+      onParsed({
+        adapter,
+        url: shareUrl,
+        shareId,
+        stoken: snap.stoken,
+        root: snap.root,
+        parsedAt: snap.fetchedAt,
+        // v1.1.6：jumper 会话标记（结果页刷新时按此文件夹重新扫描，而不是分享根）
+        jump: { url: shareUrl, rootFile, rootPath },
+      });
+      // 目录树打印到全局日志（UI 侧对过长树自动折叠 + 复制；含 fid）
+      addGlobalLog(`=====${hhmmss(snap.fetchedAt)}，已找到目录'${rootPath}'=====\n${renderTreeText(snap.root)}\n=====目录树结束=====`);
+    } catch (err) {
+      const { category, message } = classifyError(err);
+      const ts = Date.now();
+      await addRecord({ shareId, url: shareUrl, adapterId: adapter.id, parsedAt: ts, ok: false, fileCount: 0, error: message });
+      const prefs2 = getPreferences();
+      if (prefs2.footprint.keepLogs) {
+        await appendLog({ time: ts, level: 'fatal', adapterId: adapter.id, url: shareUrl, message: `解析失败（jumper ${rootPath}）：${message}` });
+      }
+      if (isCorsError(err)) {
+        if (prefs2.modals.corsAutoJump) {
+          openShareFallback(shareUrl);
+          toast('CORS 拦截：已跳转分享页，新标签页用于解析请勿关闭，退出本站自动清理', 'info');
+        } else {
+          setCorsJump({ message });
+        }
+      } else if (category === 'need-login' && prefs2.modals.loginJump) {
         setLoginJump({ message });
       } else {
         toast(message, 'error');

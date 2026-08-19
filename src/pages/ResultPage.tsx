@@ -18,6 +18,7 @@ import { DownloaderModal } from '../components/DownloaderModal';
 import { ExportFailModal } from '../components/ExportFailModal';
 import { ParseFailModal } from '../components/ParseFailModal';
 import { CloudflareWarnModal } from '../components/CloudflareWarnModal';
+import { JumptoFolderTipModal } from '../components/JumptoFolderTipModal';
 import { useToast } from '../components/Toast';
 import { fetchLinks } from '../core/linkFetcher';
 import { fetchListSnapshot, renderTreeText, hhmmss } from '../core/listFetcher';
@@ -27,7 +28,7 @@ import { appendLog, listLogs, exportLogsMd } from '../core/footprint/logs';
 import { addGlobalLog } from '../core/footprint/globalLog';
 import { saveTree } from '../core/footprint/trees';
 import { savePraseEntries, listPraseByShareId, clearPraseByShareId } from '../core/footprint/prase';
-import { getPugs } from '../adapters/ucPugs';
+import { getPugs } from '../adapters/uc/cookies';
 import { exportTask, exportTreeMd } from '../tasks/export';
 import { loadDownloaderConfig } from '../utils/downloader';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
@@ -54,11 +55,13 @@ function downloadFile(fileName: string, content: string): void {
 export interface ResultPageProps {
   session: ParseSession;
   onBack: () => void;
+  /** v1.1.6 jumper：跳转文件夹（回输入页自动触发新任务） */
+  onJump: (url: string) => void;
 }
 
 const KIND_LABEL: Record<TaskKind, string> = { aria2: 'aria2', gopeed: 'Gopeed', curl: 'cURL' };
 
-export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
+export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.Element {
   const { adapter, shareId, url } = session;
   const { toast } = useToast();
 
@@ -97,6 +100,8 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
   const [parseFail, setParseFail] = useState<{ fileName: string } | null>(null);
   // v1.1.5.2 兜底：pages.dev 代理 + 同分秒重复解析 → 强制提示
   const [cloudflareWarn, setCloudflareWarn] = useState(false);
+  // v1.1.6 jumper：0B 文件夹「转到此文件夹」提示弹窗
+  const [jumpWarn, setJumpWarn] = useState<{ jumpUrl: string; folderPath: string; originalTitle: string } | null>(null);
   const [downloaderOpen, setDownloaderOpen] = useState(false);
   // §12 顺序固化：prase（解析下载方式）阶段才需要 cookie —— 弹窗确认后预热 + 继续
   const [cookieWarn, setCookieWarn] = useState<{ files: ShareFile[] } | null>(null);
@@ -151,6 +156,27 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
   const flatRows: TreeRow[] = useMemo(() => flattenTree(root, expanded), [root, expanded]);
   const leafNodeOf = (fid: string): TreeNode | undefined =>
     flatRows.find((r) => r.node.file.fid === fid && !r.node.file.dir)?.node;
+
+  // v1.1.6 显示属性：每个目录的直接文件数 / 子文件夹数（单次遍历预计算，避免逐行递归）
+  const dirProps = useMemo(() => {
+    const map = new Map<string, { files: number; dirs: number }>();
+    const walk = (n: TreeNode): void => {
+      if (!n.file.dir || !n.children) return;
+      let files = 0;
+      let dirs = 0;
+      for (const c of n.children) {
+        if (c.file.dir) {
+          dirs++;
+          walk(c);
+        } else {
+          files++;
+        }
+      }
+      map.set(n.file.fid, { files, dirs });
+    };
+    walk(root);
+    return map;
+  }, [root]);
 
   // 跨文件夹判断：选中文件父目录数 > 1
   const crossFolder = useMemo(() => {
@@ -377,10 +403,15 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
     setRefreshingList(true);
     setFetchProgress({ done: 0, total: 1 });
     addGlobalLog('=====获取资源列表（scanner）=====');
-    addGlobalLog(`scanner：手动刷新 — ${adapter.name} · ${linkAbbr(url, adapter.id)}`);
+    addGlobalLog(`scanner：手动刷新 — ${adapter.name} · ${linkAbbr(url, adapter.id)}${session.jump ? `（jumper ${session.jump.rootPath}）` : ''}`);
     try {
+      // v1.1.6 jumper：按目标文件夹重新扫描（不是分享根）；stoken 复用当前会话的（避免额外 token 接口）
       const snap = await fetchListSnapshot(adapter, shareId, url, {
         onProgress: (done, total) => setFetchProgress({ done, total }),
+        stoken: session.jump ? stoken : undefined,
+        rootFile: session.jump?.rootFile,
+        rootPath: session.jump?.rootPath,
+        rootIsShareRoot: session.jump ? false : undefined,
       });
       setRoot(snap.root);
       setStoken(snap.stoken);
@@ -388,7 +419,8 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
       setLinks(null); // 映射可能变化（增删文件/令牌失效），全部作废重新解析
       // v1.1.5.3：足迹里的直链结果同步作废（fid 映射可能已变化）
       await clearPraseByShareId(shareId).catch(() => undefined);
-      if (prefs.footprint.keepTrees) {
+      // v1.1.6 jumper 不覆盖 trees 快照（子树根不是分享根，复用会污染整棵目录树）
+      if (prefs.footprint.keepTrees && !session.jump) {
         await saveTree({
           shareId,
           url,
@@ -460,6 +492,66 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
       return;
     }
     requestFetchLinks([node.file]);
+  };
+
+  /* ---------- v1.1.6 jumper：0B 文件夹「转到此文件夹」→ 二次获取（新建相关联的链接任务） ---------- */
+  /** 收集从分享根到目标文件夹的 fid 链（分享根不入链） */
+  const collectFolderChain = (target: TreeNode): Array<{ fid: string; name: string }> => {
+    const chain: Array<{ fid: string; name: string }> = [];
+    const walk = (n: TreeNode): boolean => {
+      if (n.file.fid === target.file.fid) {
+        chain.push({ fid: n.file.fid, name: n.file.fileName });
+        return true;
+      }
+      if (!n.children) return false;
+      for (const c of n.children) {
+        if (walk(c)) {
+          chain.push({ fid: n.file.fid, name: n.file.fileName });
+          return true;
+        }
+      }
+      return false;
+    };
+    walk(root);
+    chain.reverse(); // 根 → 目标
+    if (chain[0]?.fid === root.file.fid) chain.shift(); // 分享根不入链
+    return chain;
+  };
+
+  const jumpToFolder = (node: TreeNode): void => {
+    if (!adapter.buildJumpUrl) {
+      toast('该网盘暂不支持文件夹跳转', 'error');
+      return;
+    }
+    const chain = collectFolderChain(node);
+    const jumpUrl = adapter.buildJumpUrl(shareId, chain);
+    if (!jumpUrl) {
+      toast('生成跳转链接失败，请刷新资源列表后重试', 'error');
+      return;
+    }
+    const folderPath = node.path; // 文件夹绝对路径（日志/提示展示）
+    const originalTitle = root.children?.[0]?.file.fileName ?? linkAbbr(url, adapter.id); // 原任务 banner 标题
+    addGlobalLog(`=====${hhmmss(Date.now())}，跳转到'${folderPath}'=====`);
+    addGlobalLog(`${hhmmss(Date.now())} jumper：扫描暂存区，寻找唯一标识符`);
+    if (prefs.modals.jumpTip) {
+      setJumpWarn({ jumpUrl, folderPath, originalTitle });
+    } else {
+      doJump(jumpUrl, folderPath, originalTitle);
+    }
+  };
+
+  /** 真正跳转：历史记录 link 日志最早写入 from/in，然后回输入页自动解析新任务 */
+  const doJump = (jumpUrl: string, folderPath: string, originalTitle: string): void => {
+    if (prefs.footprint.keepLogs) {
+      void appendLog({
+        time: Date.now(),
+        level: 'info',
+        adapterId: adapter.id,
+        url: jumpUrl,
+        message: `${hhmmss(Date.now())} from '${folderPath}' in '${originalTitle}'`,
+      });
+    }
+    onJump(jumpUrl);
   };
 
   /* ---------- 导出（浏览器直连/复制直链已移除：UC referer 白名单拒绝第三方源，§10.1.4） ---------- */
@@ -668,6 +760,9 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
             onToggleDirAll={toggleDirAll}
             onParseFile={parseSingleFile}
             busy={fetching}
+            onJumpToFolder={jumpToFolder}
+            showDirProps={prefs.showDirProps}
+            dirProps={dirProps}
           />
         </div>
       </div>
@@ -695,6 +790,17 @@ export function ResultPage({ session, onBack }: ResultPageProps): JSX.Element {
         />
       )}
       {cloudflareWarn && <CloudflareWarnModal onClose={() => setCloudflareWarn(false)} />}
+      {jumpWarn && (
+        <JumptoFolderTipModal
+          folderPath={jumpWarn.folderPath}
+          onConfirm={() => {
+            const j = jumpWarn;
+            setJumpWarn(null);
+            doJump(j.jumpUrl, j.folderPath, j.originalTitle);
+          }}
+          onCancel={() => setJumpWarn(null)}
+        />
+      )}
       {downloaderOpen && <DownloaderModal onClose={() => setDownloaderOpen(false)} />}
       {cookieWarn && adapter.cookie && (
         <CookieWarnModal

@@ -59,6 +59,7 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
     { key: 'corsAutoJump', label: 'CORS 拦截后自动跳转', sub: '备用形式：跳分享页供书签解析，退出本站自动清理；默认关=先弹窗' },
     { key: 'exportFailWarn', label: '导出任务失败警告弹窗', sub: '未选中有效文件时弹出；关闭后以 toast 提示' },
     { key: 'parseFailWarn', label: '单文件解析失败警告弹窗', sub: '解析失败提示刷新资源列表；关闭后以 toast 提示' },
+    { key: 'jumpTip', label: '跳转到文件夹是否提示', sub: '对于风控造成的0B文件夹支持二次获取资源目录，此时会新建一个相关联的链接任务' },
   ];
 
   return (

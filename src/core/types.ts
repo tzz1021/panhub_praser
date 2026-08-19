@@ -63,10 +63,18 @@ export interface TreeWalkOptions {
   recursive?: boolean;
   /** 最大深度（根 = 0；默认 0 = 不限） */
   maxDepth?: number;
-  /** 并发列表请求数（默认 3，防风控） */
+  /** 并发列表请求数（默认 2，v1.1.6 防风控从 3 降为 2） */
   concurrency?: number;
+  /** 同目录翻页间隔 ms（默认 250，v1.1.6 目录翻页节流防风控） */
+  pageIntervalMs?: number;
   /** 是否聚合目录大小（默认 true；关掉可省子目录遍历） */
   aggregateSize?: boolean;
+  /** 根节点条目（默认分享根占位；jumper 二次获取时传目标文件夹，v1.1.6） */
+  rootFile?: ShareFile;
+  /** 根节点路径（默认 "/"；jumper 传文件夹绝对路径，v1.1.6） */
+  rootPath?: string;
+  /** 根节点是否分享根目录（默认 true；jumper 传 false，list 不带 banner/share 扩展字段） */
+  rootIsShareRoot?: boolean;
   /** 进度回调：每完成一个节点触发（done/total 为已完成/预估节点数） */
   onProgress?: (done: number, total: number, current: TreeNode) => void;
 }
@@ -116,6 +124,8 @@ export interface ModalPrefs {
   parseFailWarn: boolean;
   /** CORS 拦截后是否自动跳转分享页（1.0.3：备用形式，默认关；开=自动跳分享页，退出本站自动清理新标签） */
   corsAutoJump: boolean;
+  /** 跳转到文件夹是否提示（v1.1.6：0B 文件夹二次获取前的提示弹窗；默认开） */
+  jumpTip: boolean;
 }
 
 /** 足迹偏好（仅本地，IndexedDB） */
@@ -172,6 +182,8 @@ export interface Preferences {
   scanDepth: number;
   /** 显示文件夹大小 */
   showDirSize: boolean;
+  /** 显示属性：文件夹内部文件和子文件夹个数（v1.1.6；默认开） */
+  showDirProps: boolean;
   /** 确认解析弹窗（默认开） */
   confirmParse: boolean;
   /** 显示每个 file 的下载器 ETA 跟踪 */
@@ -377,6 +389,11 @@ export interface ParseSession {
   stoken: string;
   /** 目录树（buildTree 产物） */
   root: TreeNode;
-  /** 资源列表获取时间（ls 完成时间）ms */
+  /** 资源列表获取时间（scanner 完成时间）ms */
   parsedAt: number;
+  /**
+   * v1.1.6 jumper：本会话由跳转链接（0B 文件夹二次获取）产生；
+   * 非空时结果页「获取最新资源列表」按该文件夹重新扫描（而不是分享根）。
+   */
+  jump?: { url: string; rootFile: ShareFile; rootPath: string };
 }

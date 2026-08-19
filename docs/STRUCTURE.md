@@ -22,13 +22,19 @@ pan-web/
 │   ├── app.tsx                    # 路由：/#/（输入页）/ 结果页 / /#/dev（开发页）
 │   │
 │   ├── adapters/                  # ★ 网盘适配层：所有网盘差异收口在这
-│   │   ├── types.ts               #   PanAdapter 接口（detect/token/tree/download/limits）
+│   │   ├── types.ts               #   PanAdapter 接口（detect/token/tree/download/limits/jumper）
 │   │   ├── registry.ts            #   适配器注册表 + detectShareUrl(url) 识别网盘
-│   │   ├── uc.ts                  #   UC 实现（v1，全流程已验证）
-│   │   └── README.md              #   新网盘接入指南（照着 uc.ts 抄结构即可）
+│   │   ├── uc/                    #   UC 子目录（v1.1.6 规范：一个网盘一个子目录）
+│   │   │   ├── types.ts           #     UC 静态属性（API 地址/错误码/特性表/原始类型）
+│   │   │   ├── registry.ts        #     组装完整 ucAdapter（其余文件只提供能力）
+│   │   │   ├── scanner.ts         #     扫描能力（token/detail/download，原 uc.ts）
+│   │   │   ├── cookies.ts         #     __pugs 存取（原 ucPugs.ts）
+│   │   │   ├── selector.ts        #     链接识别：短链接 / #/list/share 长链接（v1.1.6）
+│   │   │   └── jumper.ts          #     0B 文件夹跳转链接构建/解析（v1.1.6）
+│   │   └── README.md              #   新网盘接入指南（照着 uc/ 抄结构即可）
 │   │
 │   ├── core/                      # ★ 通用逻辑：不依赖任何网盘细节
-│   │   ├── treeWalker.ts          #   目录树递归遍历（深度上限/并发 3/大小聚合）
+│   │   ├── treeWalker.ts          #   目录树递归遍历（并发 2/翻页节流 250ms/大小聚合/jumper 根节点）
 │   │   ├── linkFetcher.ts         #   批量直链获取（15 个/批 + 1s 节流，参考 LinkSwift）
 │   │   ├── preferences.ts         #   偏好设置（localStorage，默认值见 docs/changelog）
 │   │   ├── errors.ts              #   错误码 → 中文文案 + 错误分类（游客超限/需登录/过期）
@@ -45,6 +51,7 @@ pan-web/
 │   │   ├── DirectoryTree.tsx      #   目录树（两种模式：|--- / 缩进，默认 |---）
 │   │   ├── FileCheckbox.tsx       #   文件勾选（全选/按大小类型过滤）
 │   │   ├── CookieWarnModal.tsx    #   读取 cookie 警告弹窗（一次性确认）
+│   │   ├── JumptoFolderTipModal.tsx #  0B 文件夹跳转提示弹窗（v1.1.6，驼峰命名）
 │   │   ├── LoginJumpModal.tsx     #   需要登录 → 跳转提示 + 自动关标签选项
 │   │   └── settings/              #   偏好设置面板（按设计稿三块：UAC/默认方式/足迹）
 │   │       ├── UacTable.tsx       #     网盘 × 转存/登录/限速 配置表

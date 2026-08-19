@@ -347,9 +347,14 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
                     const t = new Date(e.time);
                     const p = (n: number): string => String(n).padStart(2, '0');
                     const stamp = `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`;
-                    // 折叠块（v1.1.4/1.1.5）：目录树 / 解析结果 —— 过长自动折叠，点击展开
-                    if (e.message.startsWith('=====目录树') || e.message.startsWith('=====解析结果')) {
-                      const isTree = e.message.startsWith('=====目录树');
+                    // 折叠块（v1.1.4/1.1.5/1.1.6）：目录树 / 解析结果 / jumper 已找到目录 —— 过长自动折叠，点击展开
+                    if (
+                      e.message.startsWith('=====目录树') ||
+                      e.message.startsWith('=====解析结果') ||
+                      (e.message.startsWith('=====') && e.message.includes('已找到目录'))
+                    ) {
+                      const isTreeBlock =
+                        e.message.startsWith('=====目录树') || (e.message.startsWith('=====') && e.message.includes('已找到目录'));
                       const nl = e.message.indexOf('\n');
                       const header = nl > 0 ? e.message.slice(0, nl) : e.message;
                       const body = nl > 0 ? e.message.slice(nl + 1).replace(/\n=====(目录树|解析结果)结束=====$/, '') : '';
@@ -359,7 +364,7 @@ export function HistoryPage({ onReparse }: HistoryPageProps): JSX.Element {
                           <details className="log-tree">
                             {/* v1.1.5.3：折叠内容一键复制，方便直接贴给开发者分析 */}
                             <summary>
-                              <span>{isTree ? '🌳' : '📄'} {header}（过长自动折叠，点击展开）</span>
+                              <span>{isTreeBlock ? '🌳' : '📄'} {header}（过长自动折叠，点击展开）</span>
                               <button
                                 type="button"
                                 className="btn btn-ghost btn-sm"

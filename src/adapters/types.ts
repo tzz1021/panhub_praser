@@ -116,7 +116,7 @@ export interface PanLimits {
   batchOnlyAriaGopeed: boolean;
   /** 游客大小限制说明（如 UC "4G 文件都不需要，临界未知"） */
   sizeLimitNote?: string;
-  /** oss/sig 较小有效期说明（如 UC "约 3h（直链 3-6h / __pugs 3h，实测）"；未知不填显示 —） */
+  /** oss/sig 较小有效期说明（如 UC "直链 3-6h/Cookie 3h；未知不填显示 —） */
   linkExpiryNote?: string;
 }
 
@@ -151,6 +151,13 @@ export interface PanAdapter {
   readonly cookie?: CookieRequirement;
   /** 从分享链接提取分享 ID；无法识别返回 null */
   parseShareId(url: string): ShareId | null;
+  /**
+   * 0B 文件夹跳转链接（v1.1.6）：fid 链 → 分享页跳转长链接；不支持返回 null。
+   * 风控集群导致目录树拉取失败时，用它二次获取该文件夹的资源列表。
+   */
+  buildJumpUrl?(shareId: ShareId, segments: Array<{ fid: string; name: string }>): string | null;
+  /** 解析跳转长链接：返回 shareId + fid 链；非跳转链接返回 null */
+  parseJumpUrl?(url: string): { shareId: ShareId; segments: Array<{ fid: string; name: string }> } | null;
   /** 获取分享访问令牌（token 三连第一步） */
   getToken(params: TokenParams): Promise<TokenResult>;
   /** 获取单层目录/文件列表（目录遍历由 core/treeWalker 递归调用） */

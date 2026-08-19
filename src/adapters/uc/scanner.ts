@@ -1,5 +1,8 @@
 /**
- * UC 网盘适配器（docs/STRUCTURE.md：src/adapters/uc.ts）
+ * UC 网盘扫描器（docs/STRUCTURE.md：src/adapters/uc/scanner.ts）
+ *
+ * 原 src/adapters/uc.ts（1.1.6 adapter 规范整理迁入）；负责 token / detail / download
+ * 三个 API 步骤（"scanner" = 获取资源列表的能力，术语见 AGENTS.md）。
  *
  * 实现依据：docs/reverse-notes-uc.md（纯 requests + Chromium CDP 双验证，2026-08-12 完工版）
  * 接口契约：src/adapters/types.ts（PanAdapter）
@@ -9,22 +12,20 @@
  * - download 必带 `?entry=ft&fr=pc&pr=UCBrowser`，漏一个直接 401 加密串
  * - 直链是 OSS 签名 URL，字符敏感：本层原样透传，不做任何 encode/decode/截断
  * - 批量节流（15 个/批 + 1s 间隔）归 core/linkFetcher 管，本文件单次调用只发一批
- * - 错误码 → 中文文案见 ERROR_MESSAGES，与 reverse-notes §4 一一对应
+ * - 错误码 → 中文文案见 types.ts ERROR_MESSAGES，与 reverse-notes §4 一一对应
  */
 import type {
   DownloadParams,
   DownloadResult,
   ListParams,
   ListResult,
-  PanAdapter,
-  PanLimits,
   ShareFile,
-  ShareId,
   TokenParams,
   TokenResult,
-} from './types';
-import { getActiveTransport, TransportError, type TransportResponse } from '../core/transport/types';
-import { capturePugsFromHeaders } from './ucPugs';
+} from '../types';
+import { getActiveTransport, TransportError, type TransportResponse } from '../../core/transport/types';
+import { capturePugsFromHeaders } from './cookies';
+import { API_BASE, DL_QUERY, ERROR_MESSAGES, PC_QUERY, type UcDetailItem, type UcDownloadItem } from './types';
 
 /**
  * 最近一次 UC 响应的 __pugs（§12 同响应绑定）：
@@ -33,41 +34,6 @@ import { capturePugsFromHeaders } from './ucPugs';
  * 注意：这是“响应级”绑定，不是全局令牌 —— 跨响应混用必然 403。
  */
 let lastResponsePugs: string | null = null;
-
-/** UC 分享 ID 形如 https://drive.uc.cn/s/dd2ad2345e124 或 /share/xxx */
-const SHARE_URL_RE = /^https?:\/\/(?:[a-z0-9-]+\.)*uc\.cn\/(?:s|share)\/([A-Za-z0-9_-]+)/i;
-
-/** API 前缀（reverse-notes §2） */
-const API_BASE = 'https://pc-api.uc.cn/1/clouddrive';
-/** token/detail 通用参数 */
-const PC_QUERY = 'pr=UCBrowser&fr=pc';
-/** download 必带参数，缺一个即 401（reverse-notes §2.3 / §3.1，踩坑最大） */
-const DL_QUERY = 'entry=ft&fr=pc&pr=UCBrowser';
-
-/**
- * UC 网盘特性表（偏好设置 UAC 表数据源，与 reverse-notes §3/§10 一致）：
- * - 游客可直接解析；下载层需要 __pugs 人机校验 cookie（游客态即可，§10.1）
- * - 直链可加速（UC 不限速）；23018 超限临界值未知，标注“临界未知”
- */
-const UC_LIMITS: PanLimits = {
-  needsTransfer: false,
-  needsLogin: false,
-  canRemoveSpeedLimit: true,
-  needsCookie: true, // 下载层需要 __pugs（§10：游客态 cookie，非登录态）
-  noLoginNeeded: true,
-  batchOnlyAriaGopeed: false,
-  sizeLimitNote: '4G 文件都不需要，临界未知',
-  linkExpiryNote: '直链 3-6h/Cookie 3h',
-};
-
-/** 错误码 → 中文文案（reverse-notes §4 错误码映射表） */
-const ERROR_MESSAGES: Record<number, string> = {
-  31001: '请先登录网盘（分享者或访问者要求）',
-  23018: '超出游客可获取大小限制，请登录后获取',
-  14001: '分享 ID 或 stoken 无效，请刷新重试',
-  41020: '文件令牌失效，请重新解析',
-  15000: '服务暂时不可用，请稍后重试',
-};
 
 /**
  * UC 接口错误（携带 code 供 core/errors 分类；文案已是最终中文，可直接展示）
@@ -151,18 +117,6 @@ async function request<T, M = unknown>(
   return { data: body.data, metadata: body.metadata };
 }
 
-/** detail 接口 list[] 原始元素（字段名来自真实抓包 uc_detail_sample.json） */
-interface UcDetailItem {
-  fid: string;
-  file_name?: string;
-  dir?: boolean;
-  size?: number;
-  share_fid_token?: string;
-  format_type?: string;
-  created_at?: number;
-  updated_at?: number;
-}
-
 /** 原始字段 → 接口 ShareFile（snake_case → camelCase） */
 function toShareFile(item: UcDetailItem): ShareFile {
   return {
@@ -234,18 +188,20 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
   }
   // §12 同响应绑定：本次调用开始时重置，只有本次响应的 __pugs 才能配本次的直链
   lastResponsePugs = null;
-  const { data } = await request<
-    Array<{ download_url?: string; file_name?: string; size?: number; md5?: string }>
-  >(`${API_BASE}/file/download?${DL_QUERY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      fids: params.fids,
-      fids_token: params.fidsTokens,
-      pwd_id: params.shareId,
-      stoken: params.stoken,
-    }),
-  }, '获取下载直链');
+  const { data } = await request<UcDownloadItem[]>(
+    `${API_BASE}/file/download?${DL_QUERY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fids: params.fids,
+        fids_token: params.fidsTokens,
+        pwd_id: params.shareId,
+        stoken: params.stoken,
+      }),
+    },
+    '获取下载直链',
+  );
   // 同响应 pugs（无则不带 cookie，导出命令会附提示）
   const cookie = lastResponsePugs ? { key: '__pugs' as const, value: lastResponsePugs } : undefined;
   return data.map((item) => {
@@ -262,29 +218,8 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
   });
 }
 
-/** 分享链接识别（drive.uc.cn/s/<pwd_id> 或 /share/<pwd_id>） */
-function detect(url: string): boolean {
-  return SHARE_URL_RE.test(url);
-}
-
-/** 提取分享 ID；无法识别返回 null */
-function parseShareId(url: string): ShareId | null {
-  return SHARE_URL_RE.exec(url)?.[1] ?? null;
-}
-
-/** UC 适配器实例（注册进 registry 后即启用，UI 侧无需改动） */
-export const ucAdapter: PanAdapter = {
-  id: 'uc',
-  name: 'UC 网盘',
-  limits: UC_LIMITS,
-  cookie: {
-    key: '__pugs',
-    displayName: '双下划线pugs',
-    standardLength: 208, // reverse-notes-uc.md §11.4 实测长度，弹窗核对用（v1.1.5）
-    missingHint: '没有请检查你的杂鱼浏览器是不是开启了cookie存储限制或者无痕模式，开发者请检查插件比如AdGuard可能会拦截标签页开启',
-  },
-  detect,
-  parseShareId,
+/** scanner 能力集合（registry.ts 组装成完整 PanAdapter） */
+export const ucScanner = {
   getToken,
   list,
   getDownloadLinks,

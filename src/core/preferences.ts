@@ -24,6 +24,7 @@ export const DEFAULTS: Preferences = {
   keepStructure: false,
   scanDepth: 0,
   showDirSize: true,
+  showDirProps: true, // v1.1.6：文件夹内部文件和子文件夹个数
   confirmParse: true,
   trackEta: true,
   showTree: true,
@@ -42,6 +43,7 @@ export const DEFAULTS: Preferences = {
     exportFailWarn: true, // v1.1.4：导出任务失败警告弹窗（默认开）
     parseFailWarn: true, // v1.1.4：单文件解析失败警告弹窗（默认开）
     corsAutoJump: false, // CORS 拦截默认弹窗提示（1.0.3：自动跳转改为"备用"，默认关；开=自动跳分享页）
+    jumpTip: true, // v1.1.6：跳转到文件夹是否提示（0B 文件夹二次获取）
   },
   transport: {
     mode: 'direct', // 解析通道：direct 直连（CORS 受限）| proxy 代理转发（1.1 新增）

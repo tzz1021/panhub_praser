@@ -119,6 +119,11 @@ export function App(): ReactNode {
               setSession(null);
               window.location.hash = '#/';
             }}
+            onJump={(jumpUrl) => {
+              // v1.1.6 jumper：回输入页自动触发新任务（0B 文件夹二次获取）
+              setPendingParse({ url: jumpUrl, autoParse: true });
+              window.location.hash = '#/';
+            }}
           />
         ) : view === 'history' ? (
           <HistoryPage

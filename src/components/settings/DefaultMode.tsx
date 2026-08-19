@@ -77,6 +77,13 @@ export function DefaultMode({ prefs, onChange }: DefaultModeProps): JSX.Element 
         <Switch on={prefs.showDirSize} onChange={(v) => onChange({ showDirSize: v })} />
       </div>
       <div className="switch-row">
+        <div>
+          <div className="switch-label">显示属性</div>
+          <div className="switch-sub">文件夹行显示内部文件和子文件夹个数（风控失败的 0B 文件夹无统计）</div>
+        </div>
+        <Switch on={prefs.showDirProps} onChange={(v) => onChange({ showDirProps: v })} />
+      </div>
+      <div className="switch-row">
         <div className="switch-label">确认解析弹窗（默认开）</div>
         <Switch on={prefs.confirmParse} onChange={(v) => onChange({ confirmParse: v })} />
       </div>

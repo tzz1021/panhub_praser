@@ -1,7 +1,8 @@
 /**
- * UC __pugs 令牌存取（reverse-notes-uc.md §10）
+ * UC __pugs 令牌存取（docs/STRUCTURE.md：src/adapters/uc/cookies.ts）
  *
- * 位置说明：这是 UC 网盘的专属凭据（下载层唯一必需 cookie），按架构约束
+ * 原 src/adapters/ucPugs.ts（1.1.6 adapter 规范整理迁入）。
+ * 这是 UC 网盘的专属凭据（下载层唯一必需 cookie），按架构约束
  * “core/ 零网盘依赖”（docs/transport.md）放在 adapters 层，不污染 core。
  *
  * 来源：CF 代理转发 UC API 时捕获 upstream `set-cookie: __pugs=` 回传 `x-pugs` 头
@@ -16,7 +17,7 @@
  * §12（2026-08-16 实测）：__pugs 与直链**同响应绑定** —— 某次 download
  * 响应下发的 __pugs 只对该响应的 download_url 有效，跨响应/跨环境混用
  * 一律 403（Cdn auth fail: ucidMd5 invalid）。因此导出命令不再读取本全局
- * 值，而是用适配器绑定到每个 LinkResult 的 cookie（见 uc.ts getDownloadLinks）；
+ * 值，而是用适配器绑定到每个 LinkResult 的 cookie（见 scanner.ts getDownloadLinks）；
  * 本全局值仅用于弹窗展示捕获状态与调试。
  */
 const STORAGE_KEY = 'pan-web:uc-pugs:v1';
