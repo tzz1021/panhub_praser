@@ -9,7 +9,7 @@ import type { JSX } from 'react';
 import type { ShareFile } from '../adapters/types';
 import type { LinkEntry, TreeNode } from '../core/types';
 import { formatSize, formatTime } from '../utils/format';
-import { linkDetailOf, type LinkDetail, type LinkStatusKind } from '../utils/linkStatus';
+import { linkDetailOf, linkStatusLabel, type LinkDetail, type LinkStatusKind } from '../utils/linkStatus';
 
 /** 树节点扁平行（ResultPage 预计算：按展开状态拍平 + 缩进） */
 export interface TreeRow {
@@ -40,6 +40,14 @@ export interface DirectoryTreeProps {
   showDirProps?: boolean;
   /** 文件夹属性统计（fid → {文件数, 子文件夹数}，父级预计算，避免逐行递归） */
   dirProps?: ReadonlyMap<string, { files: number; dirs: number }>;
+  /** v1.1.7 隐秘参数：文件夹行 <> 按钮（开发者直连官方 API）；缺省不显示 */
+  onHiddenVolumn?: (node: TreeNode) => void;
+  /** v1.1.7 高级功能：显示隐秘参数按钮 */
+  showHiddenVolumn?: boolean;
+  /** v1.1.7 显示 etag（最右列“校验和”，离线从数据库读取） */
+  showEtag?: boolean;
+  /** v1.1.7 显示详细的解析时间和有效期（上次HH:MM剩xHxM） */
+  showLinkDetail?: boolean;
 }
 
 export function DirectoryTree({
@@ -55,6 +63,10 @@ export function DirectoryTree({
   onJumpToFolder,
   showDirProps,
   dirProps,
+  onHiddenVolumn,
+  showHiddenVolumn,
+  showEtag,
+  showLinkDetail,
 }: DirectoryTreeProps): JSX.Element {
   if (rows.length === 0) {
     return (
@@ -72,8 +84,11 @@ export function DirectoryTree({
           <tr>
             <th className="col-name">名称</th>
             <th className="col-num">大小</th>
+            {/* v1.1.7：隐秘参数按钮列（大小与创建时间之间，纯文本 <>，不污染 padding） */}
+            <th className="col-hidden" style={{ width: 44 }} />
             <th className="col-num">创建时间</th>
             <th className="col-action">操作</th>
+            {showEtag && <th className="col-num">校验和</th>}
           </tr>
         </thead>
         <tbody>
@@ -85,6 +100,15 @@ export function DirectoryTree({
             const status: LinkStatusKind = detail.kind === 'green' ? 'green' : detail.kind === 'yellow' ? 'yellow' : detail.kind === 'failed' || detail.kind === 'terminated' ? 'red' : 'white';
             const rowClass =
               status === 'green' ? 'file-row--green' : status === 'yellow' ? 'file-row--yellow' : status === 'red' ? 'file-row--red' : '';
+            // v1.1.7：详细状态文本颜色（设置开启时显示）
+            const statusColor =
+              status === 'green'
+                ? 'var(--ok, #28a745)'
+                : status === 'yellow'
+                  ? 'var(--warn, #d4a017)'
+                  : status === 'red'
+                    ? 'var(--danger)'
+                    : 'var(--text-dim)';
             return (
               <tr key={f.fid} className={rowClass}>
                 <td className="col-name">
@@ -116,9 +140,35 @@ export function DirectoryTree({
                   </div>
                 </td>
                 <td className="col-num">{formatSize(node.size)}</td>
+                {/* v1.1.7：隐秘参数按钮（仅文件夹行；开发者用缓存 stoken + fid 直连官方 detail API） */}
+                <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                  {isDir && showHiddenVolumn && onHiddenVolumn && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ padding: '1px 6px', fontFamily: 'monospace', fontSize: 12 }}
+                      onClick={() => onHiddenVolumn(node)}
+                      title="隐秘参数（仅限开发者）：使用缓存信息直连官方 API 查看该文件夹原始字段"
+                    >
+                      {'<>'}
+                    </button>
+                  )}
+                </td>
                 <td className="col-num">{formatTime(f.modifiedAt)}</td>
                 <td className="col-action">
                   {/* v1.1.5.3：移除每行 status:xxx 文本（保留四色行底色 + 状态按钮） */}
+                  {/* v1.1.7：设置开启时显示详细状态文本（上次HH:MM剩xHxM） */}
+                  {!isDir && showLinkDetail && link && (
+                    <span className="field-hint" style={{ color: statusColor, marginRight: 6 }}>
+                      {linkStatusLabel(link, reuseWindowHours, f.size)}
+                    </span>
+                  )}
+                  {/* v1.1.7：yellow 行预留状态文本宽度占位（按钮与 white 行错开，对齐一致性） */}
+                  {!isDir && !showLinkDetail && detail.kind === 'yellow' && link && onParseFile && (
+                    <span className="field-hint" style={{ visibility: 'hidden', marginRight: 6 }}>
+                      {linkStatusLabel(link, reuseWindowHours, f.size)}
+                    </span>
+                  )}
                   {/* v1.1.6：风控导致的 0B 文件夹（children=undefined 且 size=0）→ 转到此文件夹（二次获取） */}
                   {isDir && node.children === undefined && node.size === 0 && onJumpToFolder && (
                     <button
@@ -163,6 +213,18 @@ export function DirectoryTree({
                       重新解析
                     </button>
                   )}
+                  {/* v1.1.7：yellow（有效但剩余时间不够完整下载）也可单文件重新解析（续杯） */}
+                  {!isDir && detail.kind === 'yellow' && onParseFile && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => onParseFile(f.fid)}
+                      disabled={busy}
+                      title="剩余有效期可能不足以支撑完整下载，重新解析（续杯）"
+                    >
+                      重新解析
+                    </button>
+                  )}
                   {!isDir && detail.kind === 'none' && onParseFile && (
                     <button
                       type="button"
@@ -175,6 +237,8 @@ export function DirectoryTree({
                     </button>
                   )}
                 </td>
+                {/* v1.1.7：校验和列（etag 种类/支持情况见 UAC 表；离线从数据库读取，UC 不支持显示 —） */}
+                {showEtag && <td className="col-num">{isDir ? '—' : f.md5 || f.sha1 || '—'}</td>}
               </tr>
             );
           })}

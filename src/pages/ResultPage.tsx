@@ -19,6 +19,9 @@ import { ExportFailModal } from '../components/ExportFailModal';
 import { ParseFailModal } from '../components/ParseFailModal';
 import { CloudflareWarnModal } from '../components/CloudflareWarnModal';
 import { JumptoFolderTipModal } from '../components/JumptoFolderTipModal';
+import { HiddenVolumnModal } from '../components/HiddenVolumnModal';
+import { ExportYellowModal } from '../components/ExportYellowModal';
+import { RestoreCollapsedModal } from '../components/RestoreCollapsedModal';
 import { useToast } from '../components/Toast';
 import { fetchLinks } from '../core/linkFetcher';
 import { fetchListSnapshot, renderTreeText, hhmmss } from '../core/listFetcher';
@@ -32,7 +35,7 @@ import { getPugs } from '../adapters/uc/cookies';
 import { exportTask, exportTreeMd } from '../tasks/export';
 import { loadDownloaderConfig } from '../utils/downloader';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
-import { getExpiry, isLinkGreen, isLinkUsable, isLinkYellow } from '../utils/linkStatus';
+import { getExpiry, isLinkGreen, isLinkUsable, isLinkYellow, linkDetailOf } from '../utils/linkStatus';
 import type { ExportFile, LinkEntry, LinkResult, ParseSession, TaskKind, TreeNode } from '../core/types';
 import { linkAbbr } from './HomePage';
 
@@ -88,7 +91,49 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     return set;
   }, [root]);
 
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(allDirIds)); // 默认全展开
+  // v1.1.7：目录折叠状态本地保存（按分享），复用期间可恢复
+  const collapsedKey = `panhub:collapsed:${session.shareId}`;
+  const readCollapsed = (): { fids: string[]; savedAt: number } | null => {
+    try {
+      const raw = window.localStorage.getItem(collapsedKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { fids: string[]; savedAt: number };
+      if (!Array.isArray(parsed?.fids)) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+  const writeCollapsed = (fids: ReadonlySet<string>): void => {
+    try {
+      window.localStorage.setItem(collapsedKey, JSON.stringify({ fids: [...fids], savedAt: Date.now() }));
+    } catch {
+      /* 配额/隐私模式静默 */
+    }
+  };
+  // 折叠状态初始：复用会话（fromCache）且非「丢弃」时优先恢复上次状态，否则默认全展开
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    const saved = readCollapsed();
+    if (session.fromCache && saved && prefs.restoreCollapsed !== 'discard') {
+      return new Set(saved.fids.length > 0 ? saved.fids : allDirIds);
+    }
+    return new Set(allDirIds);
+  });
+  // 保存折叠状态（任何展开/收起变化都记；同值重复保存无害）
+  useEffect(() => {
+    writeCollapsed(expanded);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
+  // 复用 + 「每次询问」→ 弹窗询问是否恢复上次折叠状态
+  useEffect(() => {
+    if (!session.fromCache || prefs.restoreCollapsed !== 'ask') return;
+    const saved = readCollapsed();
+    if (!saved || saved.fids.length === 0) return;
+    const d = new Date(saved.savedAt);
+    const p = (n: number): string => String(n).padStart(2, '0');
+    setRestoreAsk({ savedAtLabel: `${p(d.getHours())}:${p(d.getMinutes())}` });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.fromCache]);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [filterText, setFilterText] = useState('');
   const [links, setLinks] = useState<Map<string, LinkEntry> | null>(null);
@@ -102,6 +147,15 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   const [cloudflareWarn, setCloudflareWarn] = useState(false);
   // v1.1.6 jumper：0B 文件夹「转到此文件夹」提示弹窗
   const [jumpWarn, setJumpWarn] = useState<{ jumpUrl: string; folderPath: string; originalTitle: string } | null>(null);
+  // v1.1.7 隐秘参数：<> 按钮弹窗（确认后新标签直连官方 API，url 在 open 时算好）
+  const [hiddenVolumn, setHiddenVolumn] = useState<{ url: string; title: string; body: string } | null>(null);
+  // v1.1.7 导出包含黄色标记 → 弹窗模式（设置开关控制，关=简略 toast）
+  const [exportYellow, setExportYellow] = useState(false);
+  // v1.1.7 折叠状态恢复询问弹窗
+  const [restoreAsk, setRestoreAsk] = useState<{ savedAtLabel: string } | null>(null);
+  // v1.1.7 资源列表首次获取时间：会话内固定不变（刷新只更新 listAt），
+  // 头部显示「首次获取于 xx · 最后刷新于 xx」时 firstAt 即本次会话的初始获取时间
+  const [firstAt] = useState(session.parsedAt);
   const [downloaderOpen, setDownloaderOpen] = useState(false);
   // §12 顺序固化：prase（解析下载方式）阶段才需要 cookie —— 弹窗确认后预热 + 继续
   const [cookieWarn, setCookieWarn] = useState<{ files: ShareFile[] } | null>(null);
@@ -221,6 +275,29 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
         else if (mode === 'none') next.delete(f.fid);
         else if (next.has(f.fid)) next.delete(f.fid);
         else next.add(f.fid);
+      }
+      return next;
+    });
+  };
+
+  // v1.1.7：按直链状态批量勾选（绿/黄/红/未解析/已过期；基于当前解析结果离线判定）
+  const selectByStatus = (kind: 'green' | 'yellow' | 'red' | 'unparsed' | 'expired'): void => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      for (const f of visibleLeaves) {
+        const detail = linkDetailOf(links?.get(f.fid), prefs.reuseWindowHours, f.size);
+        const match =
+          kind === 'green'
+            ? detail.kind === 'green'
+            : kind === 'yellow'
+              ? detail.kind === 'yellow'
+              : kind === 'red'
+                ? detail.kind === 'failed' || detail.kind === 'terminated'
+                : kind === 'expired'
+                  ? detail.kind === 'expired'
+                  : detail.kind === 'none';
+        if (match) next.add(f.fid);
+        else next.delete(f.fid);
       }
       return next;
     });
@@ -355,6 +432,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
         ok: okCount === files.length,
         fileCount: okCount,
         error: okCount === files.length ? undefined : `${files.length - okCount} 个文件失败`,
+        kind: 'prase', // v1.1.7：历史页按记录类型显示「解析文件成功」
+        filePath: files.length === 1 ? (leafNodeOf(files[0].fid)?.path ?? files[0].fileName) : undefined,
       });
       if (prefs.footprint.keepLogs) {
         await appendLog({
@@ -440,6 +519,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
         ok: true,
         fileCount: snap.fileCount,
         title: snap.root.children?.[0]?.file.fileName,
+        kind: 'scanner', // v1.1.7：历史页按记录类型显示「获取列表成功」
       });
       if (prefs.footprint.keepLogs) {
         await appendLog({
@@ -554,6 +634,26 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     onJump(jumpUrl);
   };
 
+  /* ---------- 隐秘参数（v1.1.7）：<> 按钮 → （可选弹窗）→ 新标签直连官方 API ---------- */
+  const openHiddenVolumn = (node: TreeNode): void => {
+    if (!adapter.hiddenVolumn || !adapter.buildHiddenVolumnUrl) {
+      toast('该网盘暂不支持隐秘参数', 'error');
+      return;
+    }
+    const url = adapter.buildHiddenVolumnUrl({ shareId, stoken, pdirFid: node.file.fid });
+    if (!url) {
+      toast('构造查询 URL 失败（缺少缓存信息？请刷新资源列表后再试）', 'error');
+      return;
+    }
+    addGlobalLog(`${hhmmss(Date.now())} 隐秘参数：${node.path}（新标签直连官方 API，no-referer，不经过代理）`);
+    // v1.1.7 hiddenVolumnHint：开=先弹窗说明字段含义（网盘静态话术）再跳转；关=直接新标签跳转
+    if (prefs.advanced.hiddenVolumnHint) {
+      setHiddenVolumn({ url, title: adapter.hiddenVolumn.title, body: adapter.hiddenVolumn.body });
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
   /* ---------- 导出（浏览器直连/复制直链已移除：UC referer 白名单拒绝第三方源，§10.1.4） ---------- */
   const buildExportFiles = (): ExportFile[] => {
     // v1.1.5：curl 也支持保留目录结构（--create-dirs）；仅导出可用的直链（绿+黄，窗口内未过期）
@@ -606,14 +706,19 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     downloadFile(fileName, content);
     addGlobalLog(`task：合并完成，已生成 ${fileName}（下载命令已就绪）`);
     toast(`已导出 ${fileName}`, 'success');
-    // v1.1.5.2：导出的直链里有黄色（有效但剩余时间不够完整下载）→ 其他 toast 结束后补一条提醒
+    // v1.1.5.2：导出的直链里有黄色（有效但剩余时间不够完整下载）→ 提醒用户
+    // v1.1.7：设置 → 弹窗开关 exportYellowWarn：开=弹窗，关=简略 toast（话术不变）
     const exportedWithFid = files.filter((f) => f.fid !== undefined);
     const yellowFiles = exportedWithFid.filter((f) => isLinkYellow(links?.get(f.fid as string), prefs.reuseWindowHours, f.size));
     if (yellowFiles.length > 0) {
       addGlobalLog(`task：${yellowFiles.length}/${exportedWithFid.length} 个直链剩余有效期不足以支撑完整下载（黄色状态），已提示用户`);
-      setTimeout(() => {
-        toast('部分直链可能无法支持到下载完成了。。建议尽快开始下载或重新解析（一键续杯）', 'warning');
-      }, 3200);
+      if (prefs.modals.exportYellowWarn) {
+        setExportYellow(true);
+      } else {
+        setTimeout(() => {
+          toast('部分直链可能无法支持到下载完成了。。建议尽快开始下载或重新解析（一键续杯）', 'warning');
+        }, 3200);
+      }
     }
   };
 
@@ -648,7 +753,12 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             <h2 className="card-title" style={{ fontSize: 15 }}>
               {adapter.name} · {shareId}
             </h2>
-            <span className="field-hint">资源列表获取于 {formatTime(listAt)}</span>
+            <span className="field-hint">
+              {/* v1.1.7：刷新后显示「首次获取于 xx · 最后刷新于 xx」 */}
+              {listAt > firstAt
+                ? `资源列表首次获取于 ${formatTime(firstAt)} · 最后刷新于 ${formatTime(listAt)}`
+                : `资源列表获取于 ${formatTime(listAt)}`}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <button
@@ -687,6 +797,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             onSelectAll={() => selectVisible('all')}
             onSelectInvert={() => selectVisible('invert')}
             onSelectNone={() => selectVisible('none')}
+            onSelectByStatus={selectByStatus}
             filterText={filterText}
             onFilterChange={setFilterText}
           />
@@ -763,6 +874,10 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             onJumpToFolder={jumpToFolder}
             showDirProps={prefs.showDirProps}
             dirProps={dirProps}
+            onHiddenVolumn={openHiddenVolumn}
+            showHiddenVolumn={prefs.advanced.enabled && prefs.advanced.showHiddenVolumn}
+            showEtag={prefs.showEtag}
+            showLinkDetail={prefs.showLinkDetail}
           />
         </div>
       </div>
@@ -841,6 +956,37 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             setCookieWarn(null);
             addGlobalLog('prase：用户已确认，继续解析');
             void doFetchLinks(pendingFetch.current ?? []);
+          }}
+        />
+      )}
+      {/* v1.1.7 隐秘参数弹窗（确认后新标签直连官方 API，no-referer） */}
+      {hiddenVolumn && (
+        <HiddenVolumnModal
+          title={hiddenVolumn.title}
+          body={hiddenVolumn.body}
+          onOpen={() => {
+            window.open(hiddenVolumn.url, '_blank', 'noopener,noreferrer');
+            setHiddenVolumn(null);
+          }}
+          onClose={() => setHiddenVolumn(null)}
+        />
+      )}
+      {/* v1.1.7 导出包含黄色标记 → 弹窗（设置开关 exportYellowWarn，关=简略 toast） */}
+      {exportYellow && <ExportYellowModal onClose={() => setExportYellow(false)} />}
+      {/* v1.1.7 复用会话恢复折叠状态询问弹窗 */}
+      {restoreAsk && (
+        <RestoreCollapsedModal
+          savedAtLabel={restoreAsk.savedAtLabel}
+          onRestore={() => {
+            // 好的：显式恢复已保存的折叠状态（初始展开态已应用，这里再应用一次兜底）
+            const saved = readCollapsed();
+            if (saved) setExpanded(new Set(saved.fids.length > 0 ? saved.fids : allDirIds));
+            setRestoreAsk(null);
+          }}
+          onDiscard={() => {
+            // 不用了：丢弃上次状态，回到默认全展开
+            setExpanded(new Set(allDirIds));
+            setRestoreAsk(null);
           }}
         />
       )}

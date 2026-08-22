@@ -118,7 +118,7 @@ export function LinkInput({
           <input
             className="input"
             list="panhub-history"
-            placeholder="粘贴 UC 分享链接（短链接或 #/list/share 文件夹跳转长链接）或整段分享文案"
+            placeholder="粘贴后自动识别驱动种类，支持长短两种链接"
             value={url}
             onChange={(e) => handleChange(e.target.value)}
             onKeyDown={(e) => {

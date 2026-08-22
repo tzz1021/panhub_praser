@@ -150,6 +150,37 @@ async function getToken(params: TokenParams): Promise<TokenResult> {
   return { stoken: data.stoken };
 }
 
+/**
+ * 构造 detail 接口查询 URL（v1.1.7 隐秘参数：浏览器直连官方 API，不经过代理）。
+ * @param pdirFid 目标文件夹 fid（根目录 "0"）
+ */
+export function buildDetailUrl(shareId: string, stoken: string, pdirFid: string): string {
+  const query = new URLSearchParams({
+    pwd_id: shareId,
+    stoken,
+    pdir_fid: pdirFid,
+    force: '0',
+    _page: '1',
+    _size: '50',
+    _fetch_banner: '0',
+    _fetch_share: '0',
+    _fetch_total: '1',
+    _sort: 'file_type:asc,file_name:asc',
+    pr: 'UCBrowser',
+    fr: 'pc',
+  });
+  return `${API_BASE}/share/sharepage/detail?${query.toString()}`;
+}
+
+/**
+ * v1.1.7 隐秘参数：构造官方 API 查询 URL（浏览器直连，**不走代理**）。
+ * 与 buildDetailUrl 同参（sharepage/detail，pdir_fid = 目标文件夹 fid），
+ * 供开发者用缓存 stoken 在结果页直连查看该文件夹的原始响应字段。
+ */
+export function buildHiddenVolumnUrl(params: { shareId: string; stoken: string; pdirFid: string }): string {
+  return buildDetailUrl(params.shareId, params.stoken, params.pdirFid);
+}
+
 /** 第 2 步：单层目录/文件列表（reverse-notes §2.2；目录遍历由 core/treeWalker 递归调用） */
 async function list(params: ListParams): Promise<ListResult> {
   const query = new URLSearchParams({

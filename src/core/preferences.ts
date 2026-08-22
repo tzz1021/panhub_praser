@@ -25,6 +25,10 @@ export const DEFAULTS: Preferences = {
   scanDepth: 0,
   showDirSize: true,
   showDirProps: true, // v1.1.6：文件夹内部文件和子文件夹个数
+  showEtag: false, // v1.1.7：校验和列（UC 不支持，默认关）
+  showLinkDetail: false, // v1.1.7：显示详细的解析时间和有效期
+  defaultTerminal: '', // v1.1.7：默认终端类型（空 = 浏览器 UA）
+  restoreCollapsed: 'ask', // v1.1.7：复用期间恢复上次折叠状态（丢弃/恢复/每次询问）
   confirmParse: true,
   trackEta: true,
   showTree: true,
@@ -44,11 +48,19 @@ export const DEFAULTS: Preferences = {
     parseFailWarn: true, // v1.1.4：单文件解析失败警告弹窗（默认开）
     corsAutoJump: false, // CORS 拦截默认弹窗提示（1.0.3：自动跳转改为"备用"，默认关；开=自动跳分享页）
     jumpTip: true, // v1.1.6：跳转到文件夹是否提示（0B 文件夹二次获取）
+    exportYellowWarn: true, // v1.1.7：export 包含黄色标记是否弹窗提示（关=简略 toast）
   },
   transport: {
     mode: 'direct', // 解析通道：direct 直连（CORS 受限）| proxy 代理转发（1.1 新增）
     proxyUrl: '', // 用户填写的 API 转发代理地址（最好是自己的）
     proxyToken: '', // 代理访问令牌（部署时配置的 PROXY_TOKEN；代理未设 token 时可留空）
+  },
+  advanced: {
+    enabled: false, // v1.1.7：高级功能总开关（默认关）
+    aria2Extra: '',
+    gopeedExtra: '',
+    showHiddenVolumn: true,
+    hiddenVolumnHint: true,
   },
   /** v1.1.4：资源复用窗口（小时）；0 = 不复用 */
   reuseWindowHours: 1,
@@ -71,6 +83,7 @@ function cloneDefaults(): Preferences {
     modals: { ...DEFAULTS.modals },
     transport: { ...DEFAULTS.transport },
     footprint: { ...DEFAULTS.footprint },
+    advanced: { ...DEFAULTS.advanced },
   };
 }
 
@@ -104,13 +117,14 @@ function mergeGroup<T extends object>(base: T, stored: unknown): T {
   return out;
 }
 
-/** 合并偏好：顶层浅合并 + 四个嵌套分组（treeDetail/modals/transport/footprint）逐组浅合并 */
+/** 合并偏好：顶层浅合并 + 五个嵌套分组（treeDetail/modals/transport/footprint/advanced）逐组浅合并 */
 function mergePrefs(base: Preferences, patch: Partial<Preferences>): Preferences {
   const merged: Preferences = { ...base, ...filterUndefined(patch) };
   merged.treeDetail = mergeGroup(base.treeDetail, patch.treeDetail);
   merged.modals = mergeGroup(base.modals, patch.modals);
   merged.transport = mergeGroup(base.transport, patch.transport);
   merged.footprint = mergeGroup(base.footprint, patch.footprint);
+  merged.advanced = mergeGroup(base.advanced, patch.advanced);
   return merged;
 }
 

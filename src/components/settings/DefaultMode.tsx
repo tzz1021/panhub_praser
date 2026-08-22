@@ -1,6 +1,6 @@
 /**
- * 默认下载/解析方式（docs/STRUCTURE.md：src/components/settings/DefaultMode.tsx）
- * 对应 HANDOFF 附件 §2：单文件 / 同目录批量 / 跨文件夹三组设置。
+ * 默认下载/解析设置（docs/STRUCTURE.md：src/components/settings/DefaultMode.tsx）
+ * v1.1.7：默认下载/解析方式选项与残余代码已移除（本来就没有功能代码）。
  */
 import type { JSX } from 'react';
 import type { Preferences } from '../../core/types';
@@ -11,48 +11,10 @@ export interface DefaultModeProps {
   onChange: (patch: Partial<Preferences>) => void;
 }
 
-/** 二选一段（解析/下载） */
-function ModeSegment({
-  value,
-  onChange,
-}: {
-  value: 'parse' | 'download';
-  onChange: (v: 'parse' | 'download') => void;
-}): JSX.Element {
-  return (
-    <div className="segment">
-      <button type="button" className={value === 'parse' ? 'active' : ''} onClick={() => onChange('parse')}>
-        解析
-      </button>
-      <button type="button" className={value === 'download' ? 'active' : ''} onClick={() => onChange('download')}>
-        下载
-      </button>
-    </div>
-  );
-}
-
 export function DefaultMode({ prefs, onChange }: DefaultModeProps): JSX.Element {
   return (
     <div className="settings-section">
       <div className="settings-section-title">默认下载 / 解析</div>
-      <div className="switch-row">
-        <div>
-          <div className="switch-label">单个文件默认方式</div>
-          <div className="switch-sub">解析=展示直链与下载方式；下载=直接按默认方式下载</div>
-        </div>
-        <ModeSegment value={prefs.singleFileMode} onChange={(v) => onChange({ singleFileMode: v })} />
-      </div>
-      <div className="switch-row">
-        <div>
-          <div className="switch-label">同目录批量默认方式</div>
-          <div className="switch-sub">下载=逐个按单文件方式处理</div>
-        </div>
-        <ModeSegment value={prefs.sameDirMode} onChange={(v) => onChange({ sameDirMode: v })} />
-      </div>
-
-      <div className="settings-section-title" style={{ marginTop: 10 }}>
-        跨文件夹
-      </div>
       <div className="switch-row">
         <div className="switch-label">保留原始目录结构（aria2/gopeed/curl）</div>
         <Switch on={prefs.keepStructure} onChange={(v) => onChange({ keepStructure: v })} />
@@ -79,9 +41,58 @@ export function DefaultMode({ prefs, onChange }: DefaultModeProps): JSX.Element 
       <div className="switch-row">
         <div>
           <div className="switch-label">显示属性</div>
-          <div className="switch-sub">文件夹行显示内部文件和子文件夹个数（风控失败的 0B 文件夹无统计）</div>
+          <div className="switch-sub">scanner 受到风控影响无法做到完整遍历，因此只显示该文件夹下面的一级文件格式和一级文件夹个数</div>
         </div>
         <Switch on={prefs.showDirProps} onChange={(v) => onChange({ showDirProps: v })} />
+      </div>
+      <div className="switch-row">
+        <div>
+          <div className="switch-label">显示 etag</div>
+          <div className="switch-sub">单文件的校验和，云服务供应商提供，是否可及和种类请查 UAC 表格；离线进行，从数据库读取</div>
+        </div>
+        <Switch on={prefs.showEtag} onChange={(v) => onChange({ showEtag: v })} />
+      </div>
+      <div className="switch-row">
+        <div>
+          <div className="switch-label">显示详细的解析时间和有效期</div>
+          <div className="switch-sub">文件行显示「上次HH:MM剩xHxM」状态文本（v1.1.7 起为选项，默认关）</div>
+        </div>
+        <Switch on={prefs.showLinkDetail} onChange={(v) => onChange({ showLinkDetail: v })} />
+      </div>
+      <div className="switch-row">
+        <div style={{ flex: 1 }}>
+          <div className="switch-label">默认终端类型</div>
+          <div className="switch-sub">不填则使用当前浏览器 UA；影响导出命令的 shell 语法适配（curl/aria2 等），下载 UA 保持网盘客户端 UA 不变</div>
+          <select
+            className="input"
+            style={{ width: 220, marginTop: 6, padding: '6px 10px' }}
+            value={prefs.defaultTerminal}
+            onChange={(e) => onChange({ defaultTerminal: e.target.value })}
+          >
+            <option value="">不填（使用当前浏览器 UA）</option>
+            <option value="cmd">Microsoft Windows 命令提示符</option>
+            <option value="powershell">Microsoft Windows PowerShell</option>
+            <option value="linux-terminal">Linux 终端</option>
+            <option value="linux-shell">Linux Shell</option>
+            <option value="macos-terminal">Apple MacOS 终端</option>
+          </select>
+        </div>
+      </div>
+      <div className="switch-row">
+        <div>
+          <div className="switch-label">RestoreCollapsedStatus</div>
+          <div className="switch-sub">复用期间内恢复上次折叠状态（丢弃 / 恢复 / 每次询问，默认每次询问）</div>
+          <select
+            className="input"
+            style={{ width: 140, marginTop: 6, padding: '6px 10px' }}
+            value={prefs.restoreCollapsed}
+            onChange={(e) => onChange({ restoreCollapsed: e.target.value as 'discard' | 'restore' | 'ask' })}
+          >
+            <option value="discard">丢弃</option>
+            <option value="restore">恢复</option>
+            <option value="ask">每次询问</option>
+          </select>
+        </div>
       </div>
       <div className="switch-row">
         <div className="switch-label">确认解析弹窗（默认开）</div>

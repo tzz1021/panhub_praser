@@ -153,6 +153,8 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       // ① 快照复用：窗口内命中足迹缓存（目录树 + stoken）→ 跳过整轮 scanner
       const reuseWinMs = prefs.reuseWindowHours > 0 ? prefs.reuseWindowHours * 3600_000 : 0;
       let snap: ListSnapshot | null = null;
+      // v1.1.7 折叠状态恢复：快照复用的会话标记 fromCache，结果页据此恢复上次折叠状态/弹窗询问
+      let fromCache = false;
       if (reuseWinMs > 0 && prefs.footprint.keepTrees) {
         const cached = await getTree(shareId);
         if (cached?.stoken && now - cached.savedAt < reuseWinMs) {
@@ -168,6 +170,7 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
             fileCount: cached.fileCount,
             totalSize: cached.totalSize,
           };
+          fromCache = true;
         } else if (cached) {
           addGlobalLog(`scanner：缓存快照过期或缺少 stoken（${Math.round((now - cached.savedAt) / 60000)} 分钟前），重新拉取`);
         }
@@ -211,7 +214,7 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       if (prefs.footprint.keepLogs) {
         await appendLog({ time: snap.fetchedAt, level: 'info', adapterId: adapter.id, url: shareUrl, message: `获取资源列表成功：${abbr}，共 ${snap.fileCount} 个文件（${snap.totalSize} 字节）` });
       }
-      onParsed({ adapter, url: shareUrl, shareId, stoken: snap.stoken, root: snap.root, parsedAt: snap.fetchedAt });
+      onParsed({ adapter, url: shareUrl, shareId, stoken: snap.stoken, root: snap.root, parsedAt: snap.fetchedAt, fromCache });
       addGlobalLog(`scanner：已就绪 — ${snap.fileCount} 个文件可勾选，解析下载方式（prase）在结果页进行`);
     } catch (err) {
       const { category, message } = classifyError(err);

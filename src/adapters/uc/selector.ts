@@ -12,7 +12,7 @@
 import { SHARE_URL_RE } from './types';
 
 /** 短链接：s|share/<shareId> 结尾（$ 锚定，排除跳转后缀） */
-const SHORT_URL_RE = /^https?:\/\/(?:[a-z0-9-]+\.)*uc\.cn\/(?:s|share)\/[A-Za-z0-9_-]+$/i;
+const SHORT_URL_RE = /^https?:\/\/(?:[a-z0-9-]+\.)*uc\.cn\/(?:s|share)\/[A-Za-z0-9_-]+(?:#\/list\/share)?$/i;
 
 /** 长链接（跳转链接）：.../s/<shareId>#/list/share/<fid-name>/... */
 export const LONG_URL_RE =

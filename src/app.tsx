@@ -69,7 +69,7 @@ function SiteHeader({ onOpenSettings }: { onOpenSettings: () => void }): ReactNo
           // 首页点击品牌回输入页
         }}
       >
-        <span className="brand-logo">🔧</span>
+        <span className="brand-logo">☁️</span>
         <span className="brand-name">panhub_praser</span>
       </a>
       <div className="header-actions">

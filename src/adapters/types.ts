@@ -116,8 +116,10 @@ export interface PanLimits {
   batchOnlyAriaGopeed: boolean;
   /** 游客大小限制说明（如 UC "4G 文件都不需要，临界未知"） */
   sizeLimitNote?: string;
-  /** oss/sig 较小有效期说明（如 UC "直链 3-6h/Cookie 3h；未知不填显示 —） */
+  /** oss/sig 较小有效期说明（如 UC "直链 3-6h/Cookie 3h"；未知不填显示 —） */
   linkExpiryNote?: string;
+  /** etag 种类/支持情况（v1.1.7：如 UC "不支持"；未知不填显示 —） */
+  etagNote?: string;
 }
 
 /**
@@ -158,6 +160,16 @@ export interface PanAdapter {
   buildJumpUrl?(shareId: ShareId, segments: Array<{ fid: string; name: string }>): string | null;
   /** 解析跳转长链接：返回 shareId + fid 链；非跳转链接返回 null */
   parseJumpUrl?(url: string): { shareId: ShareId; segments: Array<{ fid: string; name: string }> } | null;
+  /**
+   * 隐秘参数静态话术（v1.1.7）：开发者功能弹窗展示的各网盘字段说明；
+   * 属于静态资源（放各网盘子目录），缺省 = 不提供该功能。
+   */
+  readonly hiddenVolumn?: { title: string; body: string };
+  /**
+   * v1.1.7 隐秘参数：构造官方 API 查询 URL（浏览器直连，**不走代理**）；
+   * 用缓存 stoken + 文件夹 fid 当 pdir_fid；缺省 = 不提供。
+   */
+  buildHiddenVolumnUrl?(params: { shareId: ShareId; stoken: string; pdirFid: string }): string | null;
   /** 获取分享访问令牌（token 三连第一步） */
   getToken(params: TokenParams): Promise<TokenResult>;
   /** 获取单层目录/文件列表（目录遍历由 core/treeWalker 递归调用） */

@@ -6,8 +6,8 @@
  * 子目录对应文件，本文件一般不动。
  */
 import type { PanAdapter } from '../types';
-import { UC_LIMITS } from './types';
-import { ucScanner } from './scanner';
+import { UC_LIMITS, UC_HIDDEN_VOLUMN_TEXT } from './types';
+import { ucScanner, buildHiddenVolumnUrl } from './scanner';
 import { detect, parseShareId } from './selector';
 import { buildJumpUrl, parseJumpUrl } from './jumper';
 
@@ -27,5 +27,9 @@ export const ucAdapter: PanAdapter = {
   // v1.1.6：0B 文件夹跳转（风控集群导致目录树拉取失败时的二次获取）
   buildJumpUrl,
   parseJumpUrl,
+  // v1.1.7：隐秘参数开发者话术（静态资源）
+  hiddenVolumn: { title: '该功能仅限开发者食用！！', body: UC_HIDDEN_VOLUMN_TEXT },
+  // v1.1.7：隐秘参数查询 URL（与 detail 同参，浏览器直连不走代理）
+  buildHiddenVolumnUrl,
   ...ucScanner,
 };

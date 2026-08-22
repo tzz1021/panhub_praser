@@ -55,11 +55,12 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
   const modalRows: Array<{ key: keyof ModalPrefs; label: string; sub?: string }> = [
     { key: 'cookieWarn', label: '读取 Cookie 警告弹窗' },
     { key: 'loginJump', label: '需要登录但未登录/过期 → 跳转提示弹窗' },
-    { key: 'autoCloseTab', label: '自动关闭新标签页', sub: '只能关闭本站打开的标签' },
+    // v1.1.7：自动关闭标签页设置选项移除（原有功能代码不动），日后单独做 node 转发代理
     { key: 'corsAutoJump', label: 'CORS 拦截后自动跳转', sub: '备用形式：跳分享页供书签解析，退出本站自动清理；默认关=先弹窗' },
     { key: 'exportFailWarn', label: '导出任务失败警告弹窗', sub: '未选中有效文件时弹出；关闭后以 toast 提示' },
     { key: 'parseFailWarn', label: '单文件解析失败警告弹窗', sub: '解析失败提示刷新资源列表；关闭后以 toast 提示' },
     { key: 'jumpTip', label: '跳转到文件夹是否提示', sub: '对于风控造成的0B文件夹支持二次获取资源目录，此时会新建一个相关联的链接任务' },
+    { key: 'exportYellowWarn', label: 'export 包含黄色标记是否弹窗提示', sub: '打开显示弹窗关闭显示简略 toast' },
   ];
 
   return (
@@ -99,6 +100,13 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
               <td>oss/sig 较小有效期</td>
               {PAN_LIST.map((p) => (
                 <td key={p.id}>{limitsById.get(p.id)?.linkExpiryNote ?? '—'}</td>
+              ))}
+            </tr>
+            <tr>
+              {/* v1.1.7：etag 种类/支持情况（前端未暴露 hash，UC 不支持） */}
+              <td>etag 种类/支持情况</td>
+              {PAN_LIST.map((p) => (
+                <td key={p.id}>{limitsById.get(p.id)?.etagNote ?? '—'}</td>
               ))}
             </tr>
           </tbody>

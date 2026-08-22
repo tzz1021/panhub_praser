@@ -126,6 +126,8 @@ export interface ModalPrefs {
   corsAutoJump: boolean;
   /** 跳转到文件夹是否提示（v1.1.6：0B 文件夹二次获取前的提示弹窗；默认开） */
   jumpTip: boolean;
+  /** export 包含黄色标记是否弹窗提示（v1.1.7：开=弹窗，关=简略 toast） */
+  exportYellowWarn: boolean;
 }
 
 /** 足迹偏好（仅本地，IndexedDB） */
@@ -170,6 +172,20 @@ export interface TransportPrefs {
   proxyToken: string;
 }
 
+/** 高级功能偏好（v1.1.7：设置面板「高级功能」折叠区，总开关默认关） */
+export interface AdvancedPrefs {
+  /** 高级功能总开关（默认关） */
+  enabled: boolean;
+  /** aria2 导出额外参数（默认留空，原样拼进每条命令） */
+  aria2Extra: string;
+  /** gopeed 导出额外参数（默认留空，JSON 对象合并进 store；非 JSON 忽略） */
+  gopeedExtra: string;
+  /** 显示隐秘参数按钮（<> 符号；默认开，受总开关控制） */
+  showHiddenVolumn: boolean;
+  /** 二级：显示按钮功能和部分参数的含义 sub 弹窗提示（默认开；总开关关闭时灰色淡化） */
+  hiddenVolumnHint: boolean;
+}
+
 /** 偏好设置（core/preferences.ts，localStorage；默认值见 HANDOFF 附件 §2/§3） */
 export interface Preferences {
   /** 单个文件默认方式：'parse' 解析展示直链 | 'download' 按默认方式直接下载 */
@@ -184,6 +200,21 @@ export interface Preferences {
   showDirSize: boolean;
   /** 显示属性：文件夹内部文件和子文件夹个数（v1.1.6；默认开） */
   showDirProps: boolean;
+  /** 显示 etag（校验和列，v1.1.7）：单文件的校验和，云服务供应商提供；UC 不支持 */
+  showEtag: boolean;
+  /** 显示详细的解析时间和有效期（v1.1.7：文件行显示「上次HH:MM剩xHxM」状态文本） */
+  showLinkDetail: boolean;
+  /**
+   * 默认终端类型（v1.1.7）：'' = 不填（使用当前浏览器 UA）；
+   * 预设：cmd / powershell / linux-terminal / linux-shell / macos-terminal。
+   * 影响导出命令的 shell 语法适配（引号转义/注释分流），不改变下载 UA（UC 客户端 UA 固定）。
+   */
+  defaultTerminal: string;
+  /**
+   * 复用期间内恢复上次折叠状态（v1.1.7）：
+   * 'discard' 丢弃 / 'restore' 恢复 / 'ask' 每次询问（默认）
+   */
+  restoreCollapsed: 'discard' | 'restore' | 'ask';
   /** 确认解析弹窗（默认开） */
   confirmParse: boolean;
   /** 显示每个 file 的下载器 ETA 跟踪 */
@@ -198,6 +229,8 @@ export interface Preferences {
   modals: ModalPrefs;
   /** 解析通道（1.1） */
   transport: TransportPrefs;
+  /** 高级功能（v1.1.7：设置面板折叠区，总开关默认关） */
+  advanced: AdvancedPrefs;
   /**
    * 资源复用窗口（小时，v1.1.4）：0 = 不复用。
    * - ls 复用：窗口内从历史/足迹再进同一分享，直接复用缓存目录树 + stoken，不重新拉取；
@@ -268,6 +301,13 @@ export interface ParseRecord {
   error?: string;
   /** 分享内容标题（1.0.2：解析时记录首个文件（夹）名，历史页展示用，不显示裸 URL） */
   title?: string;
+  /**
+   * 记录类型（v1.1.7）：'scanner' = 获取资源列表（列表成功，N 个文件）；
+   * 'prase' = 解析下载方式（解析文件成功，N 个文件）。旧记录无此字段。
+   */
+  kind?: 'scanner' | 'prase';
+  /** 文件路径+名字（v1.1.7：单文件 prase 记录写入，历史页展示用） */
+  filePath?: string;
 }
 
 /** 足迹：解析日志条目（日志单独存储；cookie 写入前必须脱敏） */
@@ -396,4 +436,6 @@ export interface ParseSession {
    * 非空时结果页「获取最新资源列表」按该文件夹重新扫描（而不是分享根）。
    */
   jump?: { url: string; rootFile: ShareFile; rootPath: string };
+  /** v1.1.7：本会话目录树来自足迹缓存快照复用（HomePage 快照复用路径写入） */
+  fromCache?: boolean;
 }
