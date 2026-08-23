@@ -2,6 +2,37 @@
 
 > 面向开发者（repo:/dev/ 入口）。面向用户的说明见 README.md。
 > 约定：`## [版本] 日期` + 三块（新增 / 修复 / 变更）。
+
+## [v1.1.8.1] 2026-08-23 ——Gopeed 推送修复（REST 契约真机实测）
+### 修复
+- **Gopeed 推送失败**（Tzz 实测无法推送）：旧实现把 UI 导入格式 `{version,tasks}` POST 到
+  /api/v1/tasks，v1.9.x 不认 → `code:1002 param invalid: rid or req`。
+  改为 REST 契约（gopeed-js 源码 + v1.9.3 无头服务端实测）：
+  - 批量：POST /api/v1/tasks/batch，body `{reqs:[{req:{url,extra:{header:{Cookie}}},opts:{name,path}}]}`
+  - 鉴权：X-Api-Token 头（旧 Authorization: Bearer 直接 401）
+  - 连接测试：GET /api/v1/info（旧 /api/v1/version 404）
+  - 保存目录：opts.path 绝对目录；用户未填保存路径时先取 GET /api/v1/config 的 downloadDir 作 base，
+    keepStructure 才能落到正确目录（否则相对路径会相对 gopeed 进程 CWD）
+- **导出 gopeed-tasks.json 同步改 REST reqs 格式**：旧 `{version,tasks,store}` 是早期 UI 导入格式，
+  v1.9.x 网页端已无此导入（bundle 里零匹配），导出的 JSON 现在可直接 `curl -d @文件` 推送
+### 变更
+- tasks/gopeed.ts：buildGopeedTasks 改产出 REST batch payload（extra.header 单数键，§12 Cookie 注入不变）
+- tests/gopeed-real.spec.ts 新增：连真 gopeed 端到端（info/推送/落盘/回显源站验证 Cookie 实际发出）
+
+## [v1.1.8] 2026-08-22 ——连接&推送本地下载器（直推任务，不再只是导出文件）
+### 新增
+- **推送下载器**按钮（资源列表工具栏，导出按钮旁）：把勾选文件的直链任务直接推到本地下载器，无需复制/导入
+  - aria2 / motrix → aria2 JSON-RPC（aria2.addUri，同协议；motrix 为内置 aria2 内核 16800）
+  - gopeed → Gopeed REST API（POST /api/v1/tasks，v1 批量 payload 与导出一致）
+  - 逐任务推送并统计成功/失败，首个网络错误（未启动/地址错/跨域拦截）即中止并给出人性化提示
+  - 推送前与导出同一套校验（未选中/含过期 → 弹窗或 toast）；§12 按文件注入 __pugs 与导出完全一致
+  - 支持 RPC 密钥：aria2 用 token:<secret> 前置参数；Gopeed 用 Authorization: Bearer <token>
+- **测试连接**按钮（连接本地下载器弹窗）：aria2.getVersion / Gopeed /api/v1/version，结果内联展示
+- 连接配置保存后立即生效（结果页重新读取，不再用旧地址推送）
+- tests/push-downloader.spec.ts：端到端实测（本地真 aria2c 下载验证目录结构/Cookie 注入 + Gopeed mock）
+### 变更
+- tasks/aria2.ts 抽出 buildAria2AddUriParams、tasks/gopeed.ts 抽出 buildGopeedTasks（导出与直推共用同一套 dir/out/header 逻辑，避免两处漂移）
+
 ## [v1.1.7] 2026-08-22 ——隐秘参数+etag试探（还有大量细节）
 ### 新增
  - 隐秘参数按钮位置：大小和创建时间两栏之间挤一下（不污染padding，创建时间向右移动）符号是纯文本'<>'

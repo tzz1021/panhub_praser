@@ -10,6 +10,7 @@ import {
   DOWNLOADER_PRESETS,
   loadDownloaderConfig,
   saveDownloaderConfig,
+  testDownloaderConnection,
 } from '../utils/downloader';
 import type { DownloaderConfig, DownloaderType } from '../utils/downloader';
 import { useToast } from './Toast';
@@ -20,6 +21,8 @@ export interface DownloaderModalProps {
 
 export function DownloaderModal({ onClose }: DownloaderModalProps): JSX.Element {
   const [cfg, setCfg] = useState<DownloaderConfig>(() => loadDownloaderConfig());
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const { toast } = useToast();
 
   const pickType = (type: DownloaderType): void => {
@@ -30,6 +33,16 @@ export function DownloaderModal({ onClose }: DownloaderModalProps): JSX.Element 
     saveDownloaderConfig(cfg);
     toast('下载器配置已保存', 'success');
     onClose();
+  };
+
+  // v1.1.8：测试连接（aria2.getVersion / Gopeed /api/v1/info），结果内联展示 + toast
+  const testConnection = async (): Promise<void> => {
+    setTesting(true);
+    setTestResult(null);
+    const r = await testDownloaderConnection(cfg);
+    setTesting(false);
+    setTestResult(r);
+    toast(r.message, r.ok ? 'success' : 'error');
   };
 
   const preset = DOWNLOADER_PRESETS[cfg.type];
@@ -92,10 +105,27 @@ export function DownloaderModal({ onClose }: DownloaderModalProps): JSX.Element 
           <div className="field-hint" style={{ background: '#f8fafc', borderRadius: 10, padding: '8px 12px' }}>
             {preset.hint}
           </div>
+          {testResult && (
+            <div
+              className="field-hint"
+              style={{
+                borderRadius: 10,
+                padding: '8px 12px',
+                background: testResult.ok ? '#ecfdf5' : '#fef2f2',
+                color: testResult.ok ? 'var(--green, #059669)' : 'var(--red, #dc2626)',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {testResult.message}
+            </div>
+          )}
         </div>
         <div className="modal-foot">
           <button type="button" className="btn btn-secondary" onClick={onClose}>
             取消
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => void testConnection()} disabled={testing}>
+            {testing ? '测试中…' : '测试连接'}
           </button>
           <button type="button" className="btn btn-primary" onClick={save}>
             保存

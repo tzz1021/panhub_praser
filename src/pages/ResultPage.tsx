@@ -33,7 +33,7 @@ import { saveTree } from '../core/footprint/trees';
 import { savePraseEntries, listPraseByShareId, clearPraseByShareId } from '../core/footprint/prase';
 import { getPugs } from '../adapters/uc/cookies';
 import { exportTask, exportTreeMd } from '../tasks/export';
-import { loadDownloaderConfig } from '../utils/downloader';
+import { DOWNLOADER_PRESETS, loadDownloaderConfig, pushFilesToDownloader } from '../utils/downloader';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
 import { getExpiry, isLinkGreen, isLinkUsable, isLinkYellow, linkDetailOf } from '../utils/linkStatus';
 import type { ExportFile, LinkEntry, LinkResult, ParseSession, TaskKind, TreeNode } from '../core/types';
@@ -69,7 +69,9 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   const { toast } = useToast();
 
   const prefs = useMemo(() => getPreferences(), []);
-  const downloader = useMemo(() => loadDownloaderConfig(), []);
+  // v1.1.8：弹窗保存后重读配置（tick 变化触发 memo 重算，避免推送用旧地址）
+  const [dlCfgTick, setDlCfgTick] = useState(0);
+  const downloader = useMemo(() => loadDownloaderConfig(), [dlCfgTick]);
 
   // v1.1.4：资源列表（ls）在结果页可刷新 —— 目录树/stoken/获取时间改为本地状态
   const [root, setRoot] = useState<TreeNode>(session.root);
@@ -157,6 +159,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   // 头部显示「首次获取于 xx · 最后刷新于 xx」时 firstAt 即本次会话的初始获取时间
   const [firstAt] = useState(session.parsedAt);
   const [downloaderOpen, setDownloaderOpen] = useState(false);
+  const [pushing, setPushing] = useState(false);
   // §12 顺序固化：prase（解析下载方式）阶段才需要 cookie —— 弹窗确认后预热 + 继续
   const [cookieWarn, setCookieWarn] = useState<{ files: ShareFile[] } | null>(null);
   const pendingFetch = useRef<ShareFile[] | null>(null);
@@ -736,6 +739,41 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     toast(`已导出 ${fileName}`, 'success');
   };
 
+  /* ---------- 推送下载器（v1.1.8：连接&直推，aria2/motrix JSON-RPC、gopeed REST API） ---------- */
+  const handlePush = async (): Promise<void> => {
+    if (fetching) {
+      toast('正在解析中，请稍候', 'error');
+      return;
+    }
+    const files = buildExportFiles();
+    if (files.length === 0) {
+      // 与导出同一套空选处理：按钮发 modal，关闭发 toast（v1.1.4 规范）
+      if (prefs.modals.exportFailWarn) {
+        addGlobalLog(`task：推送失败 — ${EXPORT_FAIL_MSG}`);
+        setExportFail(true);
+      } else {
+        toast(EXPORT_FAIL_MSG, 'error');
+      }
+      return;
+    }
+    const label = DOWNLOADER_PRESETS[downloader.type].label;
+    addGlobalLog(
+      `=====推送下载器（push）=====\npush：类型 ${label} · ${files.length} 个文件${keepStructure ? '（保留目录结构）' : ''}`,
+    );
+    setPushing(true);
+    try {
+      const r = await pushFilesToDownloader(downloader, files, {
+        keepStructure,
+        outDir: downloader.savePath || undefined,
+      });
+      addGlobalLog(`push：${label} 返回 — 成功 ${r.success} / 失败 ${r.failed}`);
+      if (!r.ok) addGlobalLog(`push：失败原因 — ${r.message}`);
+      toast(r.message, r.ok ? 'success' : 'error');
+    } finally {
+      setPushing(false);
+    }
+  };
+
   /* ---------- 渲染 ---------- */
   // v1.1.5.2：仅统计可用直链（绿+黄）；选中含绿色文件时批量解析按钮置灰（防重复刷 prase）
   const linkedOkCount = links ? selectedFiles.filter((f) => isLinkUsable(links.get(f.fid), prefs.reuseWindowHours, f.size)).length : 0;
@@ -836,6 +874,15 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             </div>
             <button
               type="button"
+              className="btn btn-emerald-soft btn-sm"
+              onClick={() => void handlePush()}
+              disabled={fetching || pushing}
+              title={`推送到本地下载器（${DOWNLOADER_PRESETS[downloader.type].label}：${downloader.rpc}），点击「连接本地下载器」可改`}
+            >
+              {pushing ? '推送中…' : `推送到${DOWNLOADER_PRESETS[downloader.type].label}`}
+            </button>
+            <button
+              type="button"
               className="btn btn-primary btn-sm"
               onClick={() => handleExport(exportKind)}
               disabled={fetching}
@@ -916,7 +963,14 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           onCancel={() => setJumpWarn(null)}
         />
       )}
-      {downloaderOpen && <DownloaderModal onClose={() => setDownloaderOpen(false)} />}
+      {downloaderOpen && (
+        <DownloaderModal
+          onClose={() => {
+            setDownloaderOpen(false);
+            setDlCfgTick((t) => t + 1); // 重读配置（保存后立即生效）
+          }}
+        />
+      )}
       {cookieWarn && adapter.cookie && (
         <CookieWarnModal
           panName={adapter.name}

@@ -102,17 +102,20 @@ export function generateAria2InputFile(files: ExportFile[]): string {
 }
 
 /**
- * 生成 aria2 JSON-RPC 批量任务数组（method aria2.addUri，格式化 JSON 字符串）。
- *
- * 每条任务：{jsonrpc, id, method, params:[[url], {dir, out}], secret: null}
- * - secret 为占位可空：aria2 若配置了 --rpc-secret，把该值换成 "token:<secret>"
- *   并插入 params 首位（[token, [url], {dir,out}]）。
+ * aria2.addUri 的单任务 params：`[urls, options]`。
+ * RPC 密钥由调用方决定是否前置 `token:<secret>` 到 params 首位。
+ */
+export type Aria2AddUriParams = [string[], { dir: string; out: string; header: string[] }];
+
+/**
+ * 生成 aria2.addUri 参数数组（v1.1.8 抽取：导出 JSON 与 RPC 直推共用同一套 dir/out/header 逻辑）。
  * - keepStructure=true：dir 为相对目录（根目录文件落到 outDir 或 "."）；
  *   false：dir 统一为 outDir（缺省 "."），out 为文件名。
+ * - header 恒为数组（§12：每文件各自的 __pugs 令牌；无凭据时为空数组，aria2 接受）。
  */
-export function generateAria2Rpc(files: ExportFile[], options: TaskOptions): string {
+export function buildAria2AddUriParams(files: ExportFile[], options: TaskOptions): Aria2AddUriParams[] {
   const baseDir = options.outDir ?? '';
-  const tasks = files.map((f, i) => {
+  return files.map((f) => {
     const out = fileNameOf(f.path);
     const relDir = dirNameOf(f.path);
     let dir: string;
@@ -121,14 +124,25 @@ export function generateAria2Rpc(files: ExportFile[], options: TaskOptions): str
     } else {
       dir = baseDir || '.';
     }
-    return {
-      jsonrpc: '2.0',
-      id: `pan-web-${i + 1}`,
-      method: 'aria2.addUri',
-      params: [[f.url], { dir, out, header: cookieHeaderArray(f) }], // §12：每文件各自的 __pugs 令牌
-      // 占位可空：配了 --rpc-secret 时替换为 "token:<secret>" 并塞进 params 首位
-      secret: null,
-    };
+    return [[f.url], { dir, out, header: cookieHeaderArray(f) }];
   });
+}
+
+/**
+ * 生成 aria2 JSON-RPC 批量任务数组（method aria2.addUri，格式化 JSON 字符串）。
+ *
+ * 每条任务：{jsonrpc, id, method, params:[[url], {dir, out}], secret: null}
+ * - secret 为占位可空：aria2 若配置了 --rpc-secret，把该值换成 "token:<secret>"
+ *   并插入 params 首位（[token, [url], {dir,out}]）。
+ */
+export function generateAria2Rpc(files: ExportFile[], options: TaskOptions): string {
+  const tasks = buildAria2AddUriParams(files, options).map((params, i) => ({
+    jsonrpc: '2.0',
+    id: `pan-web-${i + 1}`,
+    method: 'aria2.addUri',
+    params,
+    // 占位可空：配了 --rpc-secret 时替换为 "token:<secret>" 并塞进 params 首位
+    secret: null,
+  }));
   return JSON.stringify(tasks, null, 2);
 }
