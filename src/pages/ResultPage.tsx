@@ -32,6 +32,8 @@ import { addGlobalLog } from '../core/footprint/globalLog';
 import { saveTree } from '../core/footprint/trees';
 import { savePraseEntries, listPraseByShareId, clearPraseByShareId } from '../core/footprint/prase';
 import { getPugs } from '../adapters/uc/cookies';
+import { getQuarkCookieString, setQuarkCookieString, getQuarkPugs } from '../adapters/quark/cookies';
+import { CookieInputModal } from '../components/CookieInputModal';
 import { exportTask, exportTreeMd } from '../tasks/export';
 import { DOWNLOADER_PRESETS, loadDownloaderConfig, pushFilesToDownloader } from '../utils/downloader';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
@@ -162,6 +164,9 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   const [pushing, setPushing] = useState(false);
   // §12 顺序固化：prase（解析下载方式）阶段才需要 cookie —— 弹窗确认后预热 + 继续
   const [cookieWarn, setCookieWarn] = useState<{ files: ShareFile[] } | null>(null);
+  // v1.1.9：登录态 cookie 填写弹窗（夸克 23018/31001 时弹出，保存后自动重试失败文件）
+  const [cookieInputWarn, setCookieInputWarn] = useState(false);
+  const cookieRetryFiles = useRef<ShareFile[]>([]);
   const pendingFetch = useRef<ShareFile[] | null>(null);
   const [, setTick] = useState(0); // 倒计时刷新
 
@@ -390,6 +395,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           error: r.error,
           fetchedAt: Date.now(),
           cookie: r.cookie, // §12：与该直链同响应的 __pugs
+          cookieString: r.cookieString, // v1.1.9：多凭据整串（夸克登录态 + __pugs）
         });
       });
       setLinks((prev) => new Map([...(prev ?? []), ...map]));
@@ -397,6 +403,18 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
       // 失败/终止条目也落库（红色状态跨刷新保留），过期条目由 linkDetailOf 判定后走正常解析按钮
       if (prefs.footprint.keepLogs) {
         await savePraseEntries(shareId, map).catch(() => undefined);
+      }
+      // v1.1.9：夸克强制登录（23018 超限 / 31001 需登录）→ 弹登录态 cookie 填写窗，保存后自动重试
+      if (adapter.cookieInput) {
+        const needLogin = toFetch.filter((_, i) => {
+          const r = results[i];
+          return !r.ok && (r.errorCode === 23018 || r.errorCode === 31001);
+        });
+        if (needLogin.length > 0 && prefs.modals.cookieInput) {
+          addGlobalLog(`prase：${needLogin.length} 个文件需要登录态 cookie（${adapter.cookieInput.keys.map((k) => k.key).join('/')}），弹出填写窗`);
+          cookieRetryFiles.current = needLogin;
+          setCookieInputWarn(true);
+        }
       }
       // 捕获状态反馈（弹窗已展示过，这里给个结果）：
       if (adapter.cookie) {
@@ -672,6 +690,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           url: entry.url,
           size: f.size,
           cookie: entry.cookie, // §12：每文件与其直链同响应的 __pugs，merger 按文件注入
+          cookieString: entry.cookieString, // v1.1.9：多凭据整串（夸克登录态 + __pugs）
           fid: f.fid, // v1.1.5.2：导出后按 fid 查状态做黄色提醒
         };
       });
@@ -975,7 +994,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
         <CookieWarnModal
           panName={adapter.name}
           cookie={adapter.cookie}
-          capturedValue={getPugs() ?? ''}
+          capturedValue={adapter.id === 'quark' ? (getQuarkPugs() ?? '') : (getPugs() ?? '')}
           onCancel={() => {
             // v1.1.5：算了吧 = 主动终止本次解析（不再是跳过继续）
             // v1.1.5.3：批量同样标红 —— 整批请求用的是同一个 cookie，终止即整批失败（status:red 手动终止）
@@ -1010,6 +1029,30 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             setCookieWarn(null);
             addGlobalLog('prase：用户已确认，继续解析');
             void doFetchLinks(pendingFetch.current ?? []);
+          }}
+        />
+      )}
+      {/* v1.1.9 登录态 cookie 填写弹窗（夸克 23018/31001 强制登录；保存后自动重试失败文件） */}
+      {cookieInputWarn && adapter.cookieInput && (
+        <CookieInputModal
+          panName={adapter.name}
+          cookieInput={adapter.cookieInput}
+          value={adapter.cookieInput.wholeString ? getQuarkCookieString() : {}}
+          onCancel={() => {
+            setCookieInputWarn(false);
+            addGlobalLog('prase：用户放弃填写登录态 cookie，失败文件保持红色可重试');
+          }}
+          onSave={(value) => {
+            setCookieInputWarn(false);
+            const filled = typeof value === 'string' ? value.trim().length > 0 : Object.keys(value).length > 0;
+            if (typeof value === 'string') setQuarkCookieString(value);
+            const retry = cookieRetryFiles.current;
+            addGlobalLog(`prase：登录态 cookie 已保存（${filled ? '有值' : '清空'}），重试 ${retry.length} 个失败文件`);
+            if (filled && retry.length > 0) {
+              void doFetchLinks(retry);
+            } else {
+              toast('已保存（未填写任何值，失败文件可手动重试）', filled ? 'success' : 'info');
+            }
           }}
         />
       )}

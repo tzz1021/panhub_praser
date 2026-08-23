@@ -15,8 +15,8 @@
  *
  * 边界：
  *   - 只转发 API JSON，不转发文件流（直链是 OSS 签名 URL，用户浏览器直连下载）
- *   - Cookie/Authorization 类凭据一律丢弃，不转发（协议 §防滥用）
- *   - 只转发白名单请求头（content-type / accept），其余全部丢弃
+ *   - Authorization 类凭据一律丢弃；cookie 头放行（v1.1.9 夸克登录态需要，风险由 SPA 弹窗告知）
+ *   - 只转发白名单请求头（content-type / accept / accept-language / cookie），其余全部丢弃
  *
  * 部署：
  *   - Pages 项目根目录放本文件 → 自动生成 POST /api/proxy 路由（与静态站同域，SPA 侧无需跨域）
@@ -26,6 +26,7 @@
 
 const ALLOWED_HOST_SUFFIXES = [
   'uc.cn', // UC 网盘（token/detail/download 三连全在 pc-api.uc.cn / drive.uc.cn）
+  'quark.cn', // 夸克网盘（v1.1.9：token/detail/download 全在 drive-h.quark.cn；大文件需登录 cookie）
   // 后续接入的网盘域在这里追加，如 'aliyundrive.com'
 ];
 
@@ -44,8 +45,8 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'content-type, x-proxy-token',
-  // 跨域部署（如 SPA 在 GitHub Pages、代理在 pages.dev）时，浏览器需要显式放行才能读到 x-pugs
-  'Access-Control-Expose-Headers': 'x-pugs',
+  // 跨域部署（如 SPA 在 GitHub Pages、代理在 pages.dev）时，浏览器需要显式放行才能读到 x-pugs 等回传头
+  'Access-Control-Expose-Headers': 'x-pugs, x-quark-pus, x-quark-puus',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -101,10 +102,12 @@ function extractPugs(setCookie) {
   return m ? m[1] : null;
 }
 
-/** 透传前清理请求头：只留白名单，cookie/authorization 一律丢弃 */
+/** 透传前清理请求头：只留白名单；authorization 一律丢弃。
+ * cookie 例外（v1.1.9 夸克）：登录态 cookie（sdid/up/wk）随 download 请求发送，
+ * 大文件（>50MB）必需 —— SPA 弹窗已红点警告“公用代理自担账号安全”，代理端放行。 */
 function forwardHeaders(headers) {
   const out = {};
-  for (const name of ['content-type', 'accept', 'accept-language']) {
+  for (const name of ['content-type', 'accept', 'accept-language', 'cookie']) {
     const v = headers[name];
     if (typeof v === 'string' && v) out[name] = v;
   }
@@ -196,10 +199,15 @@ export async function onRequestPost(context) {
     ...CORS_HEADERS,
     'Content-Type': upstream.headers.get('content-type') ?? 'application/json; charset=utf-8',
   };
-  // 捕获 __pugs（UC 下载鉴权唯一必需 cookie）回传 SPA（§10.2 代理捕获通道）
+  // 捕获 __pugs（UC/夸克下载鉴权唯一必需 cookie）回传 SPA（§10.2 代理捕获通道）
   const pugs = extractPugs(upstream.headers.get('set-cookie'));
   if (pugs) {
     respHeaders['x-pugs'] = pugs;
+  }
+  // v1.1.9.1：夸克登录态 __pus/__puus 服务端会定期刷新（__puus 3h 会话），回传供 SPA 自动合并
+  for (const name of ['__pus', '__puus']) {
+    const m = (upstream.headers.get('set-cookie') ?? '').match(new RegExp(`(?:^|,)\\s*${name}=([^;,\\s]*)`));
+    if (m) respHeaders[`x-quark-${name.replace(/^__/, '')}`] = m[1];
   }
   return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
 }

@@ -6,6 +6,7 @@ dist/
 
 # 本地调试产物
 .vite/
+.wrangler/
 wrangler.toml.local
 
 # 系统/编辑器

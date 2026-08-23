@@ -38,19 +38,28 @@ function shellEscape(s: string): string {
   return s.replace(/"/g, '\\"');
 }
 
+/** 下载凭据（§12 同响应绑定）：cookieString（多凭据整串）优先，否则 key=value 单凭据 */
+function cookieOf(f: ExportFile): string {
+  if (f.cookieString) return f.cookieString;
+  return f.cookie ? `${f.cookie.key}=${f.cookie.value}` : '';
+}
+
 /** __pugs 下载令牌（§12 同响应绑定）：有则生成 aria2 header 片段，无则空串 */
 function cookieHeader(f: ExportFile): string {
-  return f.cookie ? ` --header="Cookie: ${f.cookie.key}=${f.cookie.value}"` : '';
+  const c = cookieOf(f);
+  return c ? ` --header="Cookie: ${c}"` : '';
 }
 
 /** input-file 里的 header 行（§12）：`  header=Cookie: __pugs=...` */
 function cookieHeaderLine(f: ExportFile): string {
-  return f.cookie ? `  header=Cookie: ${f.cookie.key}=${f.cookie.value}` : '';
+  const c = cookieOf(f);
+  return c ? `  header=Cookie: ${c}` : '';
 }
 
 /** RPC 任务选项里的 header 数组（§12） */
 function cookieHeaderArray(f: ExportFile): string[] {
-  return f.cookie ? [`Cookie: ${f.cookie.key}=${f.cookie.value}`] : [];
+  const c = cookieOf(f);
+  return c ? [`Cookie: ${c}`] : [];
 }
 
 /**

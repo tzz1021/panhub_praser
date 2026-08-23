@@ -56,7 +56,11 @@ export function generateCurlCommand(file: ExportFile, options?: Pick<TaskOptions
   const dirPart = keep && relDir ? `${relDir}/` : options?.outDir ? `${options.outDir}/` : '';
   const outPath = shellEscape(`${dirPart}${name}`);
   const createDirs = keep && relDir ? ' --create-dirs' : '';
-  const cookiePart = file.cookie ? ` -b "${file.cookie.key}=${file.cookie.value}"` : '';
+  const cookiePart = file.cookieString
+    ? ` -b "${file.cookieString}"`
+    : file.cookie
+      ? ` -b "${file.cookie.key}=${file.cookie.value}"`
+      : '';
   const hint = file.cookie ? '' : '\n# 提示：未捕获下载凭据（UC __pugs），该文件下载可能被拒（403/掐流）。请经代理解析后重新导出。';
   return `curl -L -C -${createDirs} -o "${outPath}" -A "${UC_DOWNLOAD_UA}" -e "${UC_DOWNLOAD_REFERER}"${cookiePart} "${file.url}"${hint}`;
 }

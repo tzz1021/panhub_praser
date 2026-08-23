@@ -91,11 +91,15 @@ export interface LinkResult {
   ok: boolean;
   /** 失败原因（ok = false 时给出中文文案） */
   error?: string;
+  /** 失败时的供应商业务错误码（如夸克 23018 超限 / 31001 需登录；core 零网盘依赖，duck-typing 透传） */
+  errorCode?: number | string;
   /**
    * 与该直链同响应绑定的下载凭据（§12；UC = __pugs）。
    * 导出 merger 按文件注入各自的值 —— 严禁用全局/跨响应的 cookie 替代。
    */
   cookie?: { key: string; value: string };
+  /** 完整 Cookie 头值（多凭据时优先于 cookie；夸克 = 登录态 + __pugs 整串） */
+  cookieString?: string;
 }
 
 /** 批量直链获取配置（linkFetcher；节流参数参考 LinkSwift：15 个/批 + 1s） */
@@ -128,6 +132,8 @@ export interface ModalPrefs {
   jumpTip: boolean;
   /** export 包含黄色标记是否弹窗提示（v1.1.7：开=弹窗，关=简略 toast） */
   exportYellowWarn: boolean;
+  /** 登录态 cookie 填写弹窗（v1.1.9：夸克 23018/31001 强制登录时弹出；默认开） */
+  cookieInput: boolean;
 }
 
 /** 足迹偏好（仅本地，IndexedDB） */
@@ -344,6 +350,8 @@ export interface LinkEntry {
   fetchedAt: number;
   /** 与该直链同响应绑定的下载凭据（§12；UC = __pugs），导出按文件注入 */
   cookie?: { key: string; value: string };
+  /** 完整 Cookie 头值（多凭据时优先于 cookie；夸克 = 登录态 + __pugs 整串） */
+  cookieString?: string;
   /** v1.1.5：cookie 弹窗选「算了吧」手动终止解析的时间戳（仅单文件解析会写） */
   terminatedAt?: number;
 }
@@ -360,6 +368,8 @@ export interface ExportFile {
   size?: number;
   /** 与该直链同响应绑定的下载凭据（§12；UC = __pugs），merger 按文件注入 */
   cookie?: { key: string; value: string };
+  /** 完整 Cookie 头值（多凭据时优先于 cookie；夸克 = 登录态 + __pugs 整串） */
+  cookieString?: string;
   /** 网盘文件 ID（v1.1.5.2：导出后按 fid 查状态做黄色提醒；任务生成器忽略） */
   fid?: string;
 }

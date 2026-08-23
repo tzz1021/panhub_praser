@@ -31,7 +31,9 @@ UI/adapter 逻辑零改动，**换 transport 就是换方案**。
 ### 关键设计决策
 
 1. **代理只转发 API JSON，不转发文件流**。直链是 OSS 签名 URL，用户拿到后浏览器直连 OSS CDN 下载（top-level 导航不受 CORS 限制）。代理流量 = token/detail/download 三连的纯 JSON，免费额度（10 万 req/天）个人用绰绰有余。
-2. **Cookie 类凭据禁止进 proxy**：proxy 请求头里如果出现 cookie 字段，代理端丢弃（见 §协议防滥用）。UC 零 cookie，本方案不涉及凭据。
+2. **Cookie 类凭据默认禁止进 proxy**：代理默认丢弃 cookie 头；v1.1.9 例外 —— 夸克登录态
+   cookie（sdid/up/wk）随 download 请求发送，代理放行 cookie 头（SPA 弹窗已红点警告
+   “公用代理自担账号安全”）。authorization 类一律丢弃。
 3. **防滥用**：代理默认校验 `X-Proxy-Token`（部署时生成，写入 SPA 设置），域名白名单只放行网盘 API 域，简单限频。裸奔公开代理会被薅到被网盘拉黑。
 4. **错误结构化**：`TransportError.kind` 区分 cors/network/http，adapter 据此给中文提示，不再猜 message。
 

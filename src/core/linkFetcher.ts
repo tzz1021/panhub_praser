@@ -72,8 +72,10 @@ export async function fetchLinks(
     } catch (err) {
       // 单批失败：整批标记失败；continueOnError=false 时中止剩余批次
       const message = err instanceof Error ? err.message : String(err);
+      // 业务错误码透传（duck-typing：适配器错误对象带 code 字段即可；core 零网盘依赖）
+      const errorCode = (err as { code?: number | string } | null | undefined)?.code;
       indices.forEach((idx) => {
-        results[idx] = { file: files[idx], url: '', ok: false, error: message };
+        results[idx] = { file: files[idx], url: '', ok: false, error: message, errorCode };
       });
       if (!continueOnError) {
         // 中止后剩余文件也标记失败，避免 ok:true + 空 url 的脏数据

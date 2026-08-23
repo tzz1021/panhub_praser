@@ -52,6 +52,12 @@ export interface GopeedTaskItem {
   };
 }
 
+/** 下载凭据（§12 同响应绑定）：cookieString（多凭据整串）优先，否则 key=value 单凭据 */
+function cookieOf(f: ExportFile): string {
+  if (f.cookieString) return f.cookieString;
+  return f.cookie ? `${f.cookie.key}=${f.cookie.value}` : '';
+}
+
 /** Gopeed REST 批量添加任务 payload */
 export interface GopeedBatchPayload {
   reqs: GopeedTaskItem[];
@@ -75,7 +81,7 @@ export function buildGopeedTasks(files: ExportFile[], options: TaskOptions): Gop
     return {
       req: {
         url: f.url,
-        ...(f.cookie ? { extra: { header: { Cookie: `${f.cookie.key}=${f.cookie.value}` } } } : {}), // §12
+        ...(cookieOf(f) ? { extra: { header: { Cookie: cookieOf(f) } } } : {}), // §12
       },
       opts: {
         name: fileNameOf(f.path),

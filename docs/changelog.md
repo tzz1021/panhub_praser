@@ -3,6 +3,42 @@
 > 面向开发者（repo:/dev/ 入口）。面向用户的说明见 README.md。
 > 约定：`## [版本] 日期` + 三块（新增 / 修复 / 变更）。
 
+## [v1.1.9.1] 2026-08-23 ——夸克登录 cookie 修正（真实 key：__pus/__uid/__puus）
+### 修复
+- **夸克登录态 cookie 认知修正**（Tzz 实测反馈）：旧版 sdid/up/wk 是拍脑袋假 key。
+  交叉验证 alist/boxplayer/nfd/linkswift：真实核心是 `__pus`（主凭证）+ `__uid` +
+  `__puus`（3h 会话，服务端响应自动刷新，请求缺失时才下发新值）；
+  `.pan.quark.cn` 域十几个 cookie，找最小集合不划算 → **整串粘贴原样发送**（社区最佳实践）
+- CookieInputModal 支持整串模式（wholeString）：单大输入框 + 自动检测关键 key 提示；多键模式保留
+- 适配器自动合并 __pus/__puus：proxy.js 回传 x-quark-pus/x-quark-puus，scanner 收口合并回本地
+  （alist 同款刷新逻辑，用户不用管 3h 过期）
+- 导出 cookieString = 登录整串 + 同响应 __pugs
+### 变更
+- CookieInputRequirement 加 wholeString 字段（整串 vs 多键渲染）
+- quark/cookies.ts 存储改整串（getQuarkCookieString/setQuarkCookieString）
+
+## [v1.1.9] 2026-08-23 ——适配夸克网盘（第二个适配器）
+### 新增
+- **夸克适配器**（src/adapters/quark/）：短链/长链识别、token → 目录树（scanner）→ 下载直链（prase）
+  - scanner 三连全部零 cookie（游客可读目录树）；分享根包装层自动下钻（等价网页视图）
+  - prase：直链 + 同响应 __pugs（§12 同 UC，CDN 无 pugs 即 412）；download 响应免费带 md5
+  - **游客大小限制约 50MB**（实测 41MB 可 / 51MB 23018）；大文件强制登录 → 登录态 cookie
+- **登录态 Cookie 填写弹窗**（CookieInputModal）：夸克 23018/31001 时自动弹出
+  - sdid/up/wk 填写框 + 懒人导入（Netscape / JSON / Header 字符串自动识别，支持文件选择）
+  - 红点提示登录态 cookie 风险（公用代理自担账号安全）+ get cookies.txt locally 插件链接
+  - 保存后自动重试失败文件；设置-弹窗开关新增「登录态 Cookie 填写弹窗」
+- 传输层：DownloadResult/ExportFile 支持 cookieString（多凭据整串）；LinkResult 透传 errorCode（core 零网盘依赖，duck-typing）
+- proxy.js：白名单追加 quark.cn；cookie 头放行（登录态需要，SPA 弹窗已红点警告）；x-pugs 捕获同 UC 通用
+- 首页网盘表：夸克点亮（PanTable available）
+- 文档：docs/reverse-notes-quark.md（真机逆向笔记）；tests/quark-real.spec.ts（真机 13 项）、
+  tests/quark-proxy.spec.ts（本地 wrangler 代理链路 14 项，白名单/cookie 透传/x-pugs 回传/23018 透传）
+### 变更
+- 适配器注册表注册 quark（detect 顺序：uc 优先，域名不冲突）
+- 导出任务（curl/aria2/gopeed）cookie 注入兼容 cookieString（登录串 + __pugs 整串）
+### 备注
+- 登录态 cookie 真实下载 8.5GB 未实测（无账号）；按 linkswift 观察设计，待 Tzz 真机确认
+- 大分享真机验证：3efb93ba1306（Windows 镜像，8.5GB ISO）；小文件：cdccb82aafe6（影视仓接口）
+
 ## [v1.1.8.1] 2026-08-23 ——Gopeed 推送修复（REST 契约真机实测）
 ### 修复
 - **Gopeed 推送失败**（Tzz 实测无法推送）：旧实现把 UI 导入格式 `{version,tasks}` POST 到

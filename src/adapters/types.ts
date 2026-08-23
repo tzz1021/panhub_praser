@@ -93,6 +93,11 @@ export interface DownloadResult {
    * 缺省（响应未下发/直连拿不到）= 导出时该文件命令不注入 cookie 并附提示。
    */
   cookie?: { key: string; value: string };
+  /**
+   * 完整 Cookie 头值（多凭据时优先于 cookie）：如夸克 = 登录态 sdid/up/wk
+   * + 同响应 __pugs 拼成的整串；任务生成器原样注入 `Cookie: <值>`。
+   */
+  cookieString?: string;
 }
 
 /**
@@ -140,6 +145,25 @@ export interface CookieRequirement {
   standardLength?: number;
 }
 
+/**
+ * 登录态 cookie 输入规格（需要用户**手动提供**登录 cookie 的网盘，如夸克）。
+ * 与 CookieRequirement 的区别：那是解析时自动捕获的游客态凭据（弹窗只展示）；
+ * 这是解析失败（强制登录/超限）时弹窗让用户**填写/导入**的登录态凭据，随 API 请求发送。
+ * v1.1.9.1：改为整串模式为主 —— 夸克真实 key 是 __pus/__uid/__puus（且服务端会刷新
+ * __puus），社区实践（alist/boxplayer/nfd/linkswift）都是整串 cookie 原样发送最稳。
+ */
+export interface CookieInputRequirement {
+  /** 整串模式：true = 弹窗显示单个大输入框（粘贴/导入完整 cookie 字符串）；
+   * false/缺省 = 按 keys 渲染多个填写框（旧行为） */
+  wholeString?: boolean;
+  /** 各 cookie 键（整串模式下用于展示/校验“已检测到哪些关键 key”；多键模式下渲染填写框） */
+  keys: Array<{ key: string; label: string }>;
+  /** 供应商专属提示（如登录态风险说明） */
+  notice?: string;
+  /** 未提供时的排查话术 */
+  missingHint?: string;
+}
+
 export interface PanAdapter {
   /** 唯一标识（kebab-case，如 "uc"） */
   readonly id: string;
@@ -151,6 +175,8 @@ export interface PanAdapter {
   detect(url: string): boolean;
   /** 下载层 cookie 规格（UC 需要 __pugs；无 = 不需要 cookie） */
   readonly cookie?: CookieRequirement;
+  /** 登录态 cookie 输入规格（夸克 sdid/up/wk；无 = 不需要用户填 cookie） */
+  readonly cookieInput?: CookieInputRequirement;
   /** 从分享链接提取分享 ID；无法识别返回 null */
   parseShareId(url: string): ShareId | null;
   /**

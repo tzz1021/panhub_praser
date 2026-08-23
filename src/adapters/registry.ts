@@ -9,12 +9,14 @@
  */
 import type { PanAdapter } from './types';
 import { ucAdapter } from './uc/registry';
+import { quarkAdapter } from './quark/registry';
 
 /** 已注册适配器（先注册者优先，同 id 重复注册忽略） */
 const adapters: PanAdapter[] = [];
 
-// 模块初始化时注册 v1 适配器（必须在 adapters 声明之后，避免 TDZ）
+// 模块初始化时注册适配器（必须在 adapters 声明之后，避免 TDZ）
 registerAdapter(ucAdapter);
+registerAdapter(quarkAdapter);
 
 /** 注册适配器 */
 export function registerAdapter(adapter: PanAdapter): void {

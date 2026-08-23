@@ -13,7 +13,7 @@
 import { pushFilesToDownloader, testDownloaderConnection } from '../src/utils/downloader';
 import type { DownloaderConfig } from '../src/utils/downloader';
 import http from 'node:http';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync, mkdirSync } from 'node:fs';
 
 let pass = 0;
 let fail = 0;
@@ -34,6 +34,10 @@ const cfg: DownloaderConfig = {
 };
 
 async function main(): Promise<void> {
+  /* 清空下载目录（gopeed 同名文件会自动改名 b (1).zip，残留文件会干扰任务名校验） */
+  rmSync(dlDir, { recursive: true, force: true });
+  mkdirSync(`${dlDir}/dir1/sub`, { recursive: true });
+
   /* 回显日志源站：记录 gopeed 实际发出的 Cookie */
   const seen: Array<{ path: string; cookie: string | null }> = [];
   const src = http.createServer((req, res) => {

@@ -49,6 +49,7 @@ export const DEFAULTS: Preferences = {
     corsAutoJump: false, // CORS 拦截默认弹窗提示（1.0.3：自动跳转改为"备用"，默认关；开=自动跳分享页）
     jumpTip: true, // v1.1.6：跳转到文件夹是否提示（0B 文件夹二次获取）
     exportYellowWarn: true, // v1.1.7：export 包含黄色标记是否弹窗提示（关=简略 toast）
+    cookieInput: true, // v1.1.9：登录态 cookie 填写弹窗（夸克强制登录时）
   },
   transport: {
     mode: 'direct', // 解析通道：direct 直连（CORS 受限）| proxy 代理转发（1.1 新增）

@@ -22,7 +22,7 @@ export interface PanMeta {
 /** 10 盘（顺序同 HANDOFF 附件 UAC 表）+ 115（更多网盘，1.0.3 图标就位） */
 export const PAN_LIST: PanMeta[] = [
   { id: 'baidu', short: '百', name: '百度网盘', available: false, logo: '/logos/baidupan.png' },
-  { id: 'quark', short: '夸', name: '夸克网盘', available: false, logo: '/logos/quark2.png' },
+  { id: 'quark', short: '夸', name: '夸克网盘', available: true, logo: '/logos/quark2.png' },
   { id: 'uc', short: 'UC', name: 'UC 网盘', available: true, logo: '/logos/UC2.png' },
   { id: 'aliyun', short: '阿', name: '阿里云盘', available: false, logo: '/logos/alipan-open.png' },
   { id: 'mobile', short: '移', name: '移动云盘', available: false, logo: '/logos/139-2.png' },
