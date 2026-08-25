@@ -18,9 +18,9 @@ export const ucAdapter: PanAdapter = {
   limits: UC_LIMITS,
   cookie: {
     key: '__pugs',
-    displayName: '双下划线pugs',
+    displayName: '__pugs',
     standardLength: 208, // reverse-notes-uc.md §11.4 实测长度，弹窗核对用（v1.1.5）
-    missingHint: '没有请检查你的杂鱼浏览器是不是开启了cookie存储限制或者无痕模式，开发者请检查插件比如AdGuard可能会拦截标签页开启',
+    missingHint: '如果使用公共代理那么需要设置里重新点一次保存，自建代理请去后端管理面板查看（1.2.0）UC网盘不需要登录态',
   },
   detect,
   parseShareId,

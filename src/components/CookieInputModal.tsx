@@ -2,7 +2,7 @@
  * 登录态 cookie 填写/导入弹窗（docs/STRUCTURE.md：src/components/CookieInputModal.tsx）
  *
  * v1.1.9：夸克 >50MB 大文件强制登录（23018 size limit）时弹出，
- * 让用户**手动填写/导入**登录态 cookie（sdid/up/wk），随 download API 请求发送。
+ * 让用户**手动填写/导入**登录态 cookie（整串），随 download API 请求发送。
  * 与 CookieWarnModal 的区别：那是展示自动捕获的游客态凭据；这是填登录态凭据。
  *
  * 内容（按 Tzz 弹窗规范）：
@@ -232,7 +232,15 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
               ))}
             </RedDot>
             <RedDot>
-              更推荐：使用本机插件模式（跳转到仓库 dev 分支）或者自建转发代理（跳转到 selfhost 的 wiki）
+            更推荐：使用{' '}
+            <a href="http://github.com/tzz1021/panhub_praser/tree/dev" target="_blank" rel="noreferrer">
+            本机插件模式（dev 分支）
+            </a>
+            ，或者自建转发代理（参考{' '}
+            <a href="https://github.com/tzz1021/panhub_praser/blob/master/docs/wiki-selfhost.md" target="_blank" rel="noreferrer">
+            selfhost-Wiki
+            </a>
+            ）
             </RedDot>
             <RedDot>
               {cookieInput.missingHint ?? '如果你在使用自建代理却没有显示，请检查和账号状态和自建代理面板登录状态否正常，其他问题参阅文档'}

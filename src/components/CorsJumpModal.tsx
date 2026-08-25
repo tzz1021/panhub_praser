@@ -26,9 +26,9 @@ export function CorsJumpModal({ message, onClose, onOpenSettings }: CorsJumpModa
         </div>
         <div className="modal-body">
           <p style={{ margin: 0, color: 'var(--text-dim)' }}>{message}</p>
-          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-faint)' }}>
-            这里的代理仅转发请求头不上传任何个人数据，没有预设是为了防止服务被滥用。你可以打开右上角仓库查看自托管文档指南和视频指南，嫌麻烦的也可以拿里面站长预留的哦（感谢 cloudflare 良心额度，少薅一点，或者点个 star~~赎罪~~）
-          </p>
+            <span style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>
+            这里的代理仅转发请求头不上传任何个人数据，没有预设是为了防止服务被滥用。你可以打开右上角仓库查看自托管文档指南和视频指南，嫌麻烦的也可以拿里面站长预留的哦（感谢 cloudflare 良心额度，少薅一点，或者点个 star<del>赎罪</del>）
+            </span>
         </div>
         <div className="modal-foot">
           <button type="button" className="btn btn-secondary" onClick={onClose}>

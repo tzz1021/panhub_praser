@@ -61,7 +61,7 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
     { key: 'parseFailWarn', label: '单文件解析失败警告弹窗', sub: '解析失败提示刷新资源列表；关闭后以 toast 提示' },
     { key: 'jumpTip', label: '跳转到文件夹是否提示', sub: '对于风控造成的0B文件夹支持二次获取资源目录，此时会新建一个相关联的链接任务' },
     { key: 'exportYellowWarn', label: 'export 包含黄色标记是否弹窗提示', sub: '打开显示弹窗关闭显示简略 toast' },
-    { key: 'cookieInput', label: '登录态 Cookie 填写弹窗', sub: '夸克大文件强制登录时弹出填写/导入 sdid/up/wk（v1.1.9）' },
+    { key: 'cookieInput', label: '登录态 Cookie 填写弹窗', sub: '夸克大文件强制登录时弹出填写/导入 __pus/__uid（v1.1.9）' },
   ];
 
   return (

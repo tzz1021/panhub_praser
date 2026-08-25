@@ -19,9 +19,9 @@ export const quarkAdapter: PanAdapter = {
   // 下载层 __pugs：与 UC 同一机制（响应 Set-Cookie，代理 x-pugs 回传）
   cookie: {
     key: '__pugs',
-    displayName: '双下划线pugs',
+    displayName: '__pugs',
     standardLength: 208, // 与 UC 同款长度，弹窗核对用（v1.1.5）
-    missingHint: '没有请检查你的杂鱼浏览器是不是开启了cookie存储限制或者无痕模式，开发者请检查插件比如AdGuard可能会拦截标签页开启',
+    missingHint: '50MB以上文件需要填入登录态cookie，__pugs是真实浏览器校验，不包含登录态，当前代理未传入该信息。',
   },
   // 登录态 cookie 输入规格（v1.1.9.1：整串粘贴/导入为主；真实 key 是 __pus/__uid/__puus）
   cookieInput: {

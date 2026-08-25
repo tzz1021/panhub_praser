@@ -12,7 +12,7 @@
  * - download 必带 `?entry=ft&fr=pc&pr=ucpro`；响应 Set-Cookie 下发 __pugs（3h，
  *   Domain=quark.cn）—— 直链**必须**带同响应 __pugs，否则 CDN 412（Tengine precondition）
  * - 大文件（>50MB 实测区间）download 返回 HTTP 400 + code 23018 size limit，
- *   需要登录态 cookie（sdid/up/wk，用户弹窗提供）后重试
+ *   需要登录态 cookie（整串，用户弹窗粘贴）后重试
  * - 直链是签名 URL（auth_key 6h），字符敏感：本层原样透传，不做任何加工
  * - 批量节流（15 个/批 + 1s 间隔）归 core/linkFetcher 管，本文件单次调用只发一批
  */
@@ -116,7 +116,7 @@ async function request<T, M = unknown>(
     fail(body.code, body.message);
   }
   if (res.status < 200 || res.status >= 300) {
-    fail(res.status, body?.message ?? `夸克接口 HTTP ${res.status}`);
+    fail(res.status, body?.message ?? (res.body?.trim() ? res.body.slice(0, 120) : `夸克接口 HTTP ${res.status}`));
   }
   if (!body || body.data === undefined) {
     fail('empty-response', body?.message ?? '夸克接口返回异常（非 JSON 或为空），请稍后重试');

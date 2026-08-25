@@ -1,0 +1,7 @@
+# backend 独立包（docs/selfhost-node.md §3）
+node_modules/
+webui/dist/
+
+# 运行时数据（SQLite / 密钥 / 日志；密钥与 DB 必须一起备份）
+data/
+*.log

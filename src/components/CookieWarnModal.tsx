@@ -88,7 +88,7 @@ export function CookieWarnModal({ panName, cookie, capturedValue, onConfirm, onC
             <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-faint)' }}>
               该 cookie 叫做 {cookie.key}
               {cookie.standardLength !== undefined && `，标准长度 ${cookie.standardLength}`}，
-              请自行核对后继续；你可以在设置中关闭该提示。
+              这里仅展示非登录态数值，一般用于真实浏览器校验，大量网盘全部文件或者大文件需要下一步填入登录凭证；你可以在设置中关闭该提示。。
             </p>
           )}
           {!hasValue && (

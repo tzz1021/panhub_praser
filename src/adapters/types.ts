@@ -94,7 +94,7 @@ export interface DownloadResult {
    */
   cookie?: { key: string; value: string };
   /**
-   * 完整 Cookie 头值（多凭据时优先于 cookie）：如夸克 = 登录态 sdid/up/wk
+   * 完整 Cookie 头值（多凭据时优先于 cookie）：如夸克 = 登录态 __pus 整串
    * + 同响应 __pugs 拼成的整串；任务生成器原样注入 `Cookie: <值>`。
    */
   cookieString?: string;
@@ -175,7 +175,7 @@ export interface PanAdapter {
   detect(url: string): boolean;
   /** 下载层 cookie 规格（UC 需要 __pugs；无 = 不需要 cookie） */
   readonly cookie?: CookieRequirement;
-  /** 登录态 cookie 输入规格（夸克 sdid/up/wk；无 = 不需要用户填 cookie） */
+  /** 登录态 cookie 输入规格（夸克 __pus 整串；无 = 不需要用户填 cookie） */
   readonly cookieInput?: CookieInputRequirement;
   /** 从分享链接提取分享 ID；无法识别返回 null */
   parseShareId(url: string): ShareId | null;

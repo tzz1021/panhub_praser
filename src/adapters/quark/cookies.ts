@@ -12,7 +12,7 @@
  * 发送：download API 请求头 `Cookie: <整串>` 原样透传。
  * 导入解析：支持 Netscape / JSON（editthiscookie 数组）/ Header string 三种格式。
  */
-const STORAGE_KEY = 'pan-we…e:v1';
+const STORAGE_KEY = 'pan-web:quark-cookie:v1';
 
 /** 夸克关键 cookie 键（弹窗展示/校验用；整串模式下自动检测） */
 export const QUARK_COOKIE_KEYS = ['__pus', '__uid', '__puus'] as const;
@@ -172,7 +172,7 @@ export function parseCookieText(text: string): Record<string, string> {
  * 独立存储键（不共用 UC 的），仅用于弹窗展示捕获状态；直链绑定用的是
  * scanner 里的响应级 lastResponsePugs，不读这里的全局值。
  */
-const PUGS_KEY = 'pan-we…s:v1';
+const PUGS_KEY = 'pan-web:quark-pugs:v1';
 
 /** 读取当前持有的夸克 __pugs 值；无/损坏返回 null */
 export function getQuarkPugs(): string | null {

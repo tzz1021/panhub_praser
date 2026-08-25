@@ -3,6 +3,50 @@
 > 面向开发者（repo:/dev/ 入口）。面向用户的说明见 README.md。
 > 约定：`## [版本] 日期` + 三块（新增 / 修复 / 变更）。
 
+## [v1.2.0-wip] 2026-08-25 —— backend 骨架 + 管理面板（v0.1.0）+ 夸克登录态弹窗修复
+### 新增
+- **backend/ 落地（backend/README.md + selfhost-node.md §3 结构）**：
+  - 双 listener：proxy（/api/proxy，可对公网）+ webui（/api/web/* + 静态，硬绑 127.0.0.1）
+  - 核心转发协议与 CF 版 proxy.js 完全兼容：X-Proxy-Token（timingSafeEqual）→ 白名单 →
+    限频（可选）→ 转发；回传 x-pugs/x-quark-pus/x-quark-puus；set-cookie 自动合并回账号池
+  - 存储：node:sqlite（内置，替代 better-sqlite3 草案）+ AES-256-GCM（secret.key 权限 600）
+  - 账号池字段与 SPA 弹窗对齐：quark 整串（__pus/__uid/__puus）· uc __pugs；
+    仅 prase/download 注入登录态（scan 保持游客，对齐 split 默认矩阵）
+  - 调用级脱敏落库（凭据值 SHA-256）+ 完整头进 data/tmp/debug-*.log（600，7 天轮转）
+  - WebUI 七页（Preact + vite，构建产物 40KB）：基础信息/网络配置/实时日志/数据看板/
+    插件管理/系统终端（占位）/系统配置（账号池 + 白名单 + 限频 + 通知 + CDP）
+  - WebUI 安全四件套：Host 校验 + Origin 校验 + CSRF + 随机端口；高危操作（白名单增删/
+    账号池修改）需二次输入令牌确认；令牌轮换打印到控制台
+- **夸克 23018 → CookieInputModal 链路修复**（真机复现 + E2E 验证）：
+  - 根因：ProxyTransport 对非 2xx 响应提前抛 TransportError，把 HTTP 400 壳里的
+    业务码 23018 吞掉 → needLogin 匹配不到 → 登录态弹窗永远不触发
+  - 修复：代理响应改为原样透传状态码 + body（与直连同规格），业务码由 adapter 从 body 解析
+- 顺带修复：quark/cookies.ts 存储键被损坏为含省略号字面量（pan-we…e:v1），还原为
+  pan-web:quark-cookie:v1 / pan-web:quark-pugs:v1
+### 变更
+- 技术栈偏差（记录在 backend/README.md）：存储用 node:sqlite（≥22.5 内置，Termux 友好）
+  替代 better-sqlite3；WebUI 用 Preact + 自定义 CSS（对齐 SPA 风格）替代 Tailwind/daisyUI
+  （API 契约不受影响，后续可换肤）
+### 备注
+- 验证：backend API 冒烟（鉴权/账号池/白名单/限频/转发/落库）✅ + WebUI 七页 headless
+  冒烟 ✅ + SPA 全链路（夸克分享 → CookieWarnModal → CookieInputModal）经 backend 代理 ✅
+- 待实现（后续板块）：排队/插件加载器/split+monitor/终端/CDP/一键脚本/备份脚本
+
+## [v1.2.0] 2026-08-23 ——selfhost-node 设计稿定稿（backend/ 自托管代理，里程碑）
+### 新增
+- **docs/selfhost-node.md 设计稿**（初版 STRUCTURE + 设计约束，板块化开工依据）：
+  - 定位：与 CF 版 proxy.js 协议完全兼容的本地/内网转发代理（SPA 换地址即切换）
+  - 技术栈：Node ≥20 零框架 + better-sqlite3 + AES-256-GCM + React WebUI + puppeteer-core(CDP)
+  - 核心能力：完整响应头记录（魔鬼测试刚需）、cookie 池加密存储、分流开关、
+    过期/风控通知、排队机制（家庭组）、数据看板 + 单次调用 trace
+  - 安全红线：登录态默认全关（公网强制游客）；系统终端公网默认关；webui 首启一次性令牌
+  - 开工顺序：骨架 → 核心转发 → 存储 → WebUI → 插件 → 排队/终端/文档
+### 变更
+- 基线：新建 panhub_praser_1.2.x 工作目录（拉取远程 master 最新，已含夸克 cookie 修正）
+- .gitignore 纳入 .wrangler/
+### 备注
+- backend 真实落地时打 tag v1.2.0；本条目为设计稿里程碑记录
+
 ## [v1.1.9.1] 2026-08-23 ——夸克登录 cookie 修正（真实 key：__pus/__uid/__puus）
 ### 修复
 - **夸克登录态 cookie 认知修正**（Tzz 实测反馈）：旧版 sdid/up/wk 是拍脑袋假 key。

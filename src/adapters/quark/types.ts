@@ -31,7 +31,7 @@ export const ERROR_MESSAGES: Record<number, string> = {
  * 夸克网盘特性表（偏好设置 UAC 表数据源，reverse-notes-quark.md §3/§5）：
  * - 游客可读目录树（scanner 三连全部零 cookie）；prase 小文件游客可用
  * - 下载层需要 __pugs（同 UC §12 模式，响应 Set-Cookie，3h）；>50MB 触发
- *   23018 size limit → 需要登录 cookie（sdid/up/wk）才能下载
+ *   23018 size limit → 需要登录 cookie（整串 __pus 等）才能下载
  * - etag（md5 种类）查询需要登录 + 解密脚本，暂不支持；但 download 响应免费带 md5
  */
 export const QUARK_LIMITS = {

@@ -1,0 +1,19 @@
+{
+  "name": "panhub-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "panhub_praser 自托管转发代理 + 管理面板（docs/selfhost-node.md v1.2.x）",
+  "scripts": {
+    "dev": "node src/index.js",
+    "build:webui": "vite build --config webui/vite.config.js",
+    "typecheck:webui": "vite build --config webui/vite.config.js --mode typecheck"
+  },
+  "dependencies": {
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "vite": "^8.2.2"
+  }
+}

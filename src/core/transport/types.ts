@@ -123,11 +123,11 @@ export class ProxyTransport implements Transport {
       // 代理地址不可达 / 代理没带 CORS 头
       throw new TransportError('network', `代理请求失败：${err instanceof Error ? err.message : String(err)}（请检查代理地址或网络）`);
     }
-    if (!res.ok) {
-      // 代理自身错误（token 校验失败等）
-      const text = await res.text().catch(() => '');
-      throw new TransportError('http', `代理返回 ${res.status}${text ? `：${text.slice(0, 200)}` : ''}`, res.status);
-    }
+    // 代理**原样透传**上游状态码 + body（与直连同规格）：
+    // 网盘业务错误（夸克 23018/31001 走 HTTP 400/403 + JSON body code）必须由 adapter
+    // 从 body 里解析，这里不能因 !res.ok 提前抛错丢掉业务码 —— 否则登录态弹窗永远不触发。
+    // 代理自身错误（401 令牌无效/403 白名单/429 限频）同样是 JSON body，
+    // adapter 的 status 检查会兜底展示 message（见 adapters/*/scanner.ts request）。
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => {
       headers[k] = v;
