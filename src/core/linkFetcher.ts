@@ -64,7 +64,7 @@ export async function fetchLinks(
       indices.forEach((idx, j) => {
         const item = urls[j];
         if (item?.url) {
-          results[idx] = { file: files[idx], url: item.url, ok: true, cookie: item.cookie };
+          results[idx] = { file: files[idx], url: item.url, ok: true, cookie: item.cookie, hash: item.hash };
         } else {
           results[idx] = { file: files[idx], url: '', ok: false, error: '未返回直链，请重试' };
         }

@@ -3,6 +3,44 @@
 > 面向开发者（repo:/dev/ 入口）。面向用户的说明见 README.md。
 > 约定：`## [版本] 日期` + 三块（新增 / 修复 / 变更）。
 
+## [v1.1.9.final] 2026-08-26 —— 夸克风控：UA 定制 + 智能分流（Tzz 真机 + wrangler devtools 验证）
+### 新增
+- **quark download 定制 UA（QUARK_DL_UA，与 linkswift 同款）**：
+  - 背景：cookie 穿透修复后错误从 400（无 cookie）变 401（有 cookie 但 UA 非客户端）——
+    夸克风控校验 Electron 客户端 UA，非定制 UA + 有效登录 cookie → 401 unsafe-url
+  - 实现：scanner getDownloadLinks 请求头加 `User-Agent: quark-cloud-drive/3.20.0 ... Electron/24.1.3.8`；
+    浏览器禁改 UA，该头经代理 JSON body 透传、proxy.js 白名单放行后在服务端注入
+  - 范围：仅 download 用（token/detail 游客态无需，与 linkswift 一致）
+- **导出凭据按文件大小分流（Tzz 真机 200 后确认）**：
+  - 大文件（≥50MB，登录态）：oss 校验令牌**只有 __puus** —— 从整串提取单个值回传，
+    绝不返回完整登录 cookie（导出文件可能被分享/上传，整串泄露即账号被盗；__pus 长期凭证更不可出）
+  - 小文件（游客态）：与 UC 同机制绑定同响应 __pugs
+  - types：LinkResult/LinkEntry/ExportFile 新增 hash 字段，链路透传（scanner → linkFetcher → ResultPage → 导出）
+- **hash 导出注释（v1.1.9.final）**：字段名**通用化 .hash**（Tzz 建议：网盘给的校验值不一定是 md5，
+  模仿 linkswift config.$xxx 按网盘携带；夸克 dl 响应即 md5，适配器层 item.md5 → hash 映射）——
+  aria2/curl 生成器在直链命令下一行附 `# hash: <值>`，下载后自行校验完整性（gopeed 是 JSON 格式
+  无注释概念，不附；推送下载器 API 无校验位）
+- **智能分流（fix1，Tzz 要求）**：adapter.cookieInput.sizeThreshold（夸克 50MB，实测 41MB 可/51MB 23018）
+  —— 勾选文件含 ≥50MB 时 prase 直接弹 CookieInputModal，跳过 CookieWarnModal（游客态 __pugs 对
+  23018 无意义），避免一次必然失败的 400 请求污染代理日志看板；取消时未请求过的文件标「手动终止」红
+### 修复
+- **fix2（cookie 头丢失）**：proxy.js forwardHeaders 键名大小写归一后再匹配白名单 —— SPA 发
+  'Content-Type'/'Cookie'（大写），JS 对象键区分大小写，直接 headers['cookie'] 拿不到 → 登录态
+  cookie 被静默丢弃（表现：modal 的中间变量没发到 transport）；backend/src/proxy.js 同步归一化
+  请求头键（避免 Cookie/cookie 重复头）
+- proxy.js 白名单加 user-agent（配合 UA 定制）
+- curl 生成器提示注释误报修复：hint 判断补查 cookieString（多凭据模式下不再误报“未捕获下载凭据”）
+### 变更
+- **direct 模式限制（重要）**：浏览器 fetch 禁止修改 User-Agent，direct 下大文件带有效 cookie 仍会
+  401 —— 夸克大文件下载必须走代理模式（自建/CF），UI 弹窗提示已覆盖
+### 备注
+- 验证：UA 穿透证据链完整（E2E 拦截 SPA→代理 body 含 UA+Cookie ✅ + 代理转发日志确认到达夸克 ✅）；
+  fix1 分流 E2E 通过（demo1 182MB 直接弹 CookieInputModal，CookieWarnModal 未出现）✅；
+  Tzz 真机验证：真实 cookie + 代理 → download **200** ✅（2026-08-26 21:19）
+- 单测 14/14 ✅（md5 注释行 ×5 + cookie 分流 ×9：小文件 __pugs / 大文件只 __puus / 无 __puus 不返回 /
+  无 pugs 仍只 __puus / 绝不包含 __pus 与完整串）；typecheck ✅ build ✅
+- 待 Tzz 审 diff → 推送 + tag v1.1.9.final（按协作协议先 diff 确认再推）
+
 ## [v1.2.0-wip] 2026-08-25 —— backend 骨架 + 管理面板（v0.1.0）+ 夸克登录态弹窗修复
 ### 新增
 - **backend/ 落地（backend/README.md + selfhost-node.md §3 结构）**：

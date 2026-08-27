@@ -103,12 +103,20 @@ function extractPugs(setCookie) {
 }
 
 /** 透传前清理请求头：只留白名单；authorization 一律丢弃。
- * cookie 例外（v1.1.9 夸克）：登录态 cookie（sdid/up/wk）随 download 请求发送，
- * 大文件（>50MB）必需 —— SPA 弹窗已红点警告“公用代理自担账号安全”，代理端放行。 */
+ * cookie 例外（v1.1.9 夸克）：登录态 cookie（整串 __pus/__uid/__puus）随 download 请求发送，
+ * 大文件（>50MB）必需 —— SPA 弹窗已红点警告“公用代理自担账号安全”，代理端放行。
+ *
+ * v1.1.9.2 fix2：键名**大小写归一**后再匹配 —— SPA 适配器发的是 'Content-Type'/'Cookie'（大写），
+ * JS 对象键区分大小写，直接 headers['cookie'] 会拿不到 → 登录态 cookie 被静默丢弃，
+ * 夸克 download 再次 400（23018），wrangler 日志里表现为“modal 的中间变量没发到 transport”。
+ * v1.1.9.final：白名单加 user-agent —— 夸克 download 校验 Electron 客户端 UA（非定制 UA → 401），
+ * SPA 经 JSON body 传来（浏览器禁改 UA，direct 下无效），代理端透传给上游。 */
 function forwardHeaders(headers) {
   const out = {};
-  for (const name of ['content-type', 'accept', 'accept-language', 'cookie']) {
-    const v = headers[name];
+  const lower = {};
+  for (const k of Object.keys(headers ?? {})) lower[k.toLowerCase()] = headers[k];
+  for (const name of ['content-type', 'accept', 'accept-language', 'cookie', 'user-agent']) {
+    const v = lower[name];
     if (typeof v === 'string' && v) out[name] = v;
   }
   return out;

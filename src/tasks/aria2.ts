@@ -80,7 +80,9 @@ export function generateAria2Command(files: ExportFile[], options: TaskOptions):
         : options.outDir
           ? ` --dir="${shellEscape(options.outDir)}"`
           : '';
-      return `aria2c --continue=true${cookieHeader(f)}${dirFlag} --out="${shellEscape(fileNameOf(f.path))}" "${f.url}"`;
+      // v1.1.9.final：hash 注释行（夸克 = dl 响应 md5；其他网盘可能 sha1）—— 下载后自行校验完整性
+      const hashLine = f.hash ? `\n# hash: ${f.hash}` : '';
+      return `aria2c --continue=true${cookieHeader(f)}${dirFlag} --out="${shellEscape(fileNameOf(f.path))}" "${f.url}"${hashLine}`;
     })
     .join('\n');
 }

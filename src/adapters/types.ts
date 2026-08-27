@@ -86,7 +86,11 @@ export interface DownloadResult {
   url: string;
   fileName?: string;
   size?: number;
-  md5?: string;
+  /**
+   * 文件校验 hash（网盘而异：夸克 dl 响应给 md5，其他网盘可能是 sha1 等；
+   * 导出时附注释行供下载后校验完整性，算法随网盘而异）
+   */
+  hash?: string;
   /**
    * 与该直链**同响应绑定**的下载凭据（§12 实测：跨响应/跨环境混用一律
    * 403 ucidMd5 invalid）。UC = 本次 download 响应 Set-Cookie 下发的 __pugs。
@@ -158,6 +162,12 @@ export interface CookieInputRequirement {
   wholeString?: boolean;
   /** 各 cookie 键（整串模式下用于展示/校验“已检测到哪些关键 key”；多键模式下渲染填写框） */
   keys: Array<{ key: string; label: string }>;
+  /**
+   * 大文件登录阈值（字节）：选中文件里有 ≥ 该大小（如夸克 50MB）时，prase 直接弹
+   * 登录态填写窗、跳过游客态 cookie 警告 —— 反正 download 必返回 23018，
+   * 提前弹窗可避免一次必然失败的请求（400 会污染代理日志看板）。缺省 = 不预判。
+   */
+  sizeThreshold?: number;
   /** 供应商专属提示（如登录态风险说明） */
   notice?: string;
   /** 未提供时的排查话术 */

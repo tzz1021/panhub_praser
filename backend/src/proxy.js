@@ -174,7 +174,10 @@ export async function handleProxy(reqBody, clientIp, proxyToken) {
   const pan = panOfHostname(target.hostname);
   const operation = classifyOperation(target.href);
   let accountId = null;
-  const outHeaders = { ...(reqBody.headers ?? {}) };
+  // 请求头键归一化为小写（SPA 侧发 'Content-Type'/'Cookie' 大写；归一后注入键 cookie 自然生效，
+  // 避免上游收到 Cookie/cookie 重复头或丢失登录态 —— 与 CF 版 forwardHeaders 同一修复）
+  const outHeaders = {};
+  for (const [k, v] of Object.entries(reqBody.headers ?? {})) outHeaders[k.toLowerCase()] = v;
   if (pan && operation === 'prase') {
     const hit = pickAccountForPan(pan);
     if (hit) {

@@ -5,7 +5,7 @@
  * 顶部 src/adapters/registry.ts 从这里 import 注册。
  */
 import type { PanAdapter } from '../types';
-import { QUARK_LIMITS, QUARK_HIDDEN_VOLUMN_TEXT } from './types';
+import { QUARK_LIMITS, QUARK_HIDDEN_VOLUMN_TEXT, QUARK_LOGIN_SIZE } from './types';
 import { quarkScanner, buildHiddenVolumnUrl } from './scanner';
 import { detect, parseShareId } from './selector';
 import { buildJumpUrl, parseJumpUrl } from './jumper';
@@ -26,6 +26,8 @@ export const quarkAdapter: PanAdapter = {
   // 登录态 cookie 输入规格（v1.1.9.1：整串粘贴/导入为主；真实 key 是 __pus/__uid/__puus）
   cookieInput: {
     wholeString: true,
+    // v1.1.9.2 fix1：智能分流 —— 选中含 ≥50MB 大文件时直接弹本窗（跳过 cookieWarn）
+    sizeThreshold: QUARK_LOGIN_SIZE, // 实测 41MB 可、51MB 23018，取“约 50MB 以上需登录”
     keys: QUARK_COOKIE_KEYS.map((k) => ({ key: k, label: k })),
     notice:
       '以上被标记的选项属于登录态的 cookie，如果你正在使用公用代理（比如 cloudflare）请自行承担账号安全问题',

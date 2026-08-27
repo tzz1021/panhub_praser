@@ -28,11 +28,12 @@ import type {
 import { getActiveTransport, TransportError, type TransportResponse } from '../../core/transport/types';
 import {
   capturePugsFromHeaders,
+  cookieValueOf,
   getQuarkCookieString,
   mergeQuarkSetCookies,
   setQuarkCookieString,
 } from './cookies';
-import { API_BASE, DL_QUERY, ERROR_MESSAGES, PC_QUERY, type QuarkDetailItem, type QuarkDownloadItem } from './types';
+import { API_BASE, DL_QUERY, ERROR_MESSAGES, PC_QUERY, QUARK_DL_UA, QUARK_LOGIN_SIZE, type QuarkDetailItem, type QuarkDownloadItem } from './types';
 
 /**
  * 最近一次夸克响应的 __pugs（§12 同响应绑定，与 UC 同一机制）：
@@ -251,6 +252,9 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        // v1.1.9.final：夸克 download 校验 Electron 客户端 UA（非定制 UA → 401 unsafe-url 风控），
+        // 与 linkswift 同款；浏览器禁改 User-Agent，经代理 JSON body 透传后在服务端注入（direct 模式无效）
+        'User-Agent': QUARK_DL_UA,
         ...(loginCookie ? { Cookie: loginCookie } : {}),
       },
       body: JSON.stringify({
@@ -264,7 +268,6 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
   );
   // 同响应 pugs（无则不带 cookie，导出命令会附提示）
   const pugs = lastResponsePugs;
-  const loginPart = loginCookie ? `${loginCookie}; ` : '';
   return data.map((item) => {
     if (!item.download_url) {
       fail('no-download-url', '下载接口未返回直链，请重试');
@@ -273,14 +276,22 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
       url: item.download_url, // 签名 URL，原样透传，禁止任何加工
       fileName: item.file_name,
       size: item.size,
-      md5: item.md5, // download 响应免费带 md5（etag 查询暂不做）
+      hash: item.md5, // 夸克 dl 响应给 md5（v1.1.9.final：字段通用化 hash，导出注释行校验下载完整性）
     };
-    if (pugs) {
-      // 多凭据（登录态 + __pugs）→ cookieString；仅 pugs → 单键 cookie（与 UC 一致）
-      result.cookieString = `${loginPart}__pugs=${pugs}`;
+    // v1.1.9.final：凭据按文件大小分流 ——
+    // 大文件（≥50MB，登录态）：oss 校验令牌**只有 __puus**；绝不返回完整登录 cookie
+    //   （导出文件可能被分享/上传，整串泄露即账号被盗风险）；__pus 是长期凭证更不可出。
+    // 小文件（游客态）：与 UC 同机制，绑定同响应 __pugs 即可。
+    const isBig = (item.size ?? 0) >= QUARK_LOGIN_SIZE;
+    if (isBig) {
+      const puus = cookieValueOf(loginCookie, '__puus');
+      if (puus) {
+        result.cookieString = `__puus=${puus}`;
+        result.cookie = { key: '__puus', value: puus };
+      }
+    } else if (pugs) {
+      result.cookieString = `__pugs=${pugs}`;
       result.cookie = { key: '__pugs', value: pugs };
-    } else if (loginCookie) {
-      result.cookieString = loginPart.replace(/; $/, '');
     }
     return result;
   });

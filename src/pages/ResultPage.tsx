@@ -334,6 +334,21 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
       void doFetchLinks(files);
       return;
     }
+    // v1.1.9.2 fix1：智能分流 —— 选中含大文件（≥ adapter.cookieInput.sizeThreshold，
+    // 夸克约 50MB 实测必 23018）时直接弹登录态填写窗，跳过 cookieWarn（游客态 __pugs
+    // 对 23018 无意义）；填完保存即带登录态 cookie 请求，避免一次必然失败的 400 污染代理日志看板。
+    const loginThreshold = adapter.cookieInput?.sizeThreshold;
+    if (loginThreshold && prefs.modals.cookieInput) {
+      const bigFiles = files.filter((f) => !f.dir && (f.size ?? 0) >= loginThreshold);
+      if (bigFiles.length > 0) {
+        addGlobalLog(
+          `prase：检测到 ${bigFiles.length}/${files.length} 个大文件（≥${Math.round(loginThreshold / 1024 / 1024)}MB，需登录态）—— 直接弹出登录态 cookie 填写窗`,
+        );
+        cookieRetryFiles.current = files;
+        setCookieInputWarn(true);
+        return;
+      }
+    }
     if (adapter.cookie && prefs.modals.cookieWarn) {
       addGlobalLog(`prase：需要 ${adapter.cookie.displayName} —— 弹窗已出现，等待用户选择（当前捕获 ${getPugs() ? '有值' : '为空'}，解析后代理捕获自动更新）`);
       setCookieWarn({ files });
@@ -396,6 +411,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           fetchedAt: Date.now(),
           cookie: r.cookie, // §12：与该直链同响应的 __pugs
           cookieString: r.cookieString, // v1.1.9：多凭据整串（夸克登录态 + __pugs）
+          hash: r.hash, // v1.1.9.final：文件校验 hash（夸克 = md5），导出注释行校验下载完整性
         });
       });
       setLinks((prev) => new Map([...(prev ?? []), ...map]));
@@ -691,6 +707,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           size: f.size,
           cookie: entry.cookie, // §12：每文件与其直链同响应的 __pugs，merger 按文件注入
           cookieString: entry.cookieString, // v1.1.9：多凭据整串（夸克登录态 + __pugs）
+          hash: entry.hash, // v1.1.9.final：文件校验 hash（夸克 = md5），导出注释行校验下载完整性
           fid: f.fid, // v1.1.5.2：导出后按 fid 查状态做黄色提醒
         };
       });
@@ -1040,7 +1057,31 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           value={adapter.cookieInput.wholeString ? getQuarkCookieString() : {}}
           onCancel={() => {
             setCookieInputWarn(false);
-            addGlobalLog('prase：用户放弃填写登录态 cookie，失败文件保持红色可重试');
+            const files = cookieRetryFiles.current;
+            // 智能分流路径（未发请求）：未请求过的文件标「手动终止」红（与 cookieWarn 算了吧一致）；
+            // 失败重试路径：文件已有失败记录，保持红色不动（原行为）。
+            const terminated = new Map<string, LinkEntry>();
+            const now = Date.now();
+            for (const f of files) {
+              if (isReusable(f.fid)) continue; // 已解析可用直链不受影响
+              if (links?.has(f.fid)) continue; // 已有记录（失败/成功），保持现状
+              terminated.set(f.fid, { ok: false, url: '', error: '手动终止', fetchedAt: now, terminatedAt: now });
+            }
+            if (terminated.size > 0) {
+              setLinks((prev) => {
+                const next = new Map(prev ?? []);
+                for (const [fid, entry] of terminated) next.set(fid, entry);
+                return next;
+              });
+              if (prefs.footprint.keepLogs) {
+                void savePraseEntries(shareId, terminated).catch(() => undefined);
+              }
+            }
+            addGlobalLog(
+              files.length === 1
+                ? `prase：用户放弃填写登录态 cookie — ${files[0].fileName}${terminated.size > 0 ? '（未请求，已标红手动终止）' : '（保持红色可重试）'}`
+                : `prase：用户放弃填写登录态 cookie — ${files.length} 个文件${terminated.size > 0 ? '（未请求，已标红手动终止）' : '（保持红色可重试）'}`,
+            );
           }}
           onSave={(value) => {
             setCookieInputWarn(false);

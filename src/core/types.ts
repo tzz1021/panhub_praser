@@ -100,6 +100,8 @@ export interface LinkResult {
   cookie?: { key: string; value: string };
   /** 完整 Cookie 头值（多凭据时优先于 cookie；夸克 = 登录态 + __pugs 整串） */
   cookieString?: string;
+  /** 文件校验 hash（网盘而异：夸克 = md5；导出时附注释行，用于校验下载完整性） */
+  hash?: string;
 }
 
 /** 批量直链获取配置（linkFetcher；节流参数参考 LinkSwift：15 个/批 + 1s） */
@@ -352,6 +354,8 @@ export interface LinkEntry {
   cookie?: { key: string; value: string };
   /** 完整 Cookie 头值（多凭据时优先于 cookie；夸克 = 登录态 + __pugs 整串） */
   cookieString?: string;
+  /** 文件校验 hash（网盘而异：夸克 = md5；导出时附注释行，用于校验下载完整性） */
+  hash?: string;
   /** v1.1.5：cookie 弹窗选「算了吧」手动终止解析的时间戳（仅单文件解析会写） */
   terminatedAt?: number;
 }
@@ -370,6 +374,8 @@ export interface ExportFile {
   cookie?: { key: string; value: string };
   /** 完整 Cookie 头值（多凭据时优先于 cookie；夸克 = 登录态 + __pugs 整串） */
   cookieString?: string;
+  /** 文件校验 hash（网盘而异：夸克 = md5；导出时附注释行，用于校验下载完整性） */
+  hash?: string;
   /** 网盘文件 ID（v1.1.5.2：导出后按 fid 查状态做黄色提醒；任务生成器忽略） */
   fid?: string;
 }

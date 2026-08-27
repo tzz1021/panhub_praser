@@ -18,6 +18,18 @@ export const PC_QUERY = 'pr=ucpro&fr=pc&uc_param_str=&ver=2';
 /** download 必带参数（同 UC 系：entry/ft/fr/pr，漏一个即异常） */
 export const DL_QUERY = 'entry=ft&fr=pc&pr=ucpro';
 
+/** 大文件登录阈值（字节）：实测 41MB 可、51MB 23018，取“约 50MB 以上需登录” */
+export const QUARK_LOGIN_SIZE = 50 * 1024 * 1024;
+
+/**
+ * download 接口定制 UA（v1.1.9.final，与 linkswift $quark.api.ua.downloadLink 同款）：
+ * 夸克风控对 download 校验客户端 UA —— 非 Electron 客户端 UA 直接 401（Tengine unsafe-url 风控），
+ * cookie 穿透后仍 401 就是 UA 问题。仅 download 用（token/detail 游客态无需，与 linkswift 一致）。
+ * 浏览器 fetch 禁止改 User-Agent，本头经代理 JSON body 透传后在服务端注入（proxy.js 白名单放行）。
+ */
+export const QUARK_DL_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/3.20.0 Chrome/112.0.5615.165 Electron/24.1.3.8 Safari/537.36 Channel/pckk_other_ch';
+
 /** 错误码 → 中文文案（与 UC 同源错误码体系，reverse-notes-quark.md §4） */
 export const ERROR_MESSAGES: Record<number, string> = {
   31001: '请先登录网盘（分享者或访问者要求）',
