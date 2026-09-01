@@ -22,6 +22,14 @@
  *   - Pages 项目根目录放本文件 → 自动生成 POST /api/proxy 路由（与静态站同域，SPA 侧无需跨域）
  *   - 环境变量：PROXY_TOKEN（必配，fail-closed：未配置一律 503）
  *   - 本地调试：`wrangler pages dev . -- var PROXY_TOKEN=xxx`（或 dashboard 配好后线上测）
+ *
+ * v1.2.2 云端分支（设计稿 docs/backend-wrangler-plan.md §1.2/§3；本地无 env 时零行为变化）：
+ *   - 协议体新增可选 frontend_id（SPA ProxyTransport 每次请求 crypto.randomUUID()，缺失不报错）
+ *   - env.BACKEND_URL 存在时：仅 operation==='prase' 经 {BACKEND_URL}/api/proxy/cookie-pick 取号
+ *     （800ms 短超时 + 模块级可用性缓存 5s；成功 → cookie 追加进转发头并回传 x-panhub-account 标签，
+ *     失败/超时 → 照旧用 SPA 自带 cookie；scan 保持游客，与本地 hop 语义一致）
+ *   - env.TRACE_D1 === '1' && env.DB 时：ctx.waitUntil 两阶段写 D1（proxy_logs + file_hits，schema 与本地同构），
+ *     其余情况整段跳过（本地 launcher 生成的 .dev.vars TRACE_D1=0 天然不触发）
  */
 
 const ALLOWED_HOST_SUFFIXES = [
@@ -44,9 +52,11 @@ const ipHits = new Map(); // ip -> number[]（时间戳）
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'content-type, x-proxy-token',
-  // 跨域部署（如 SPA 在 GitHub Pages、代理在 pages.dev）时，浏览器需要显式放行才能读到 x-pugs 等回传头
-  'Access-Control-Expose-Headers': 'x-pugs, x-quark-pus, x-quark-puus',
+  // v1.2.2：x-panhub-trace（IP 采集 consent 头，默认关）需要进预检白名单才能跨域发送
+  'Access-Control-Allow-Headers': 'content-type, x-proxy-token, x-panhub-trace',
+  // 跨域部署（如 SPA 在 GitHub Pages、代理在 pages.dev）时，浏览器需要显式放行才能读到 x-pugs 等回传头；
+  // v1.2.2：+ x-panhub-account（代理托管账号 label，SPA 展示用）
+  'Access-Control-Expose-Headers': 'x-pugs, x-quark-pus, x-quark-puus, x-panhub-account',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -122,13 +132,241 @@ function forwardHeaders(headers) {
   return out;
 }
 
+/* ============ v1.2.2 云端分支：取号 + D1 trace（本地无 env 时全部不触发，零行为变化） ============ */
+
+/** URL 特征 → 操作分类（scan | prase | other；与 backend/src/proxy.js classifyOperation 同一语义，最小复制） */
+function classifyOperation(url) {
+  if (/sharepage\/(token|detail)/.test(url)) return 'scan';
+  if (/file\/download/.test(url)) return 'prase';
+  return 'other';
+}
+
+/** host → pan（云端无 hosts 表，内置 uc/quark 后缀判定；与 backend panOfHostname 同一语义，最小复制） */
+function panOfHostname(hostname) {
+  const h = String(hostname ?? '').toLowerCase();
+  if (h.endsWith('uc.cn')) return 'uc';
+  if (h.endsWith('quark.cn')) return 'quark';
+  return null;
+}
+
+/** BACKEND_URL 可用性缓存（模块级；成功/失败都缓存 5s，避免每请求探测宕机后端） */
+let backendAvail = { ok: true, at: 0 };
+
+function backendKnownDown(now) {
+  return !backendAvail.ok && now - backendAvail.at < 5000;
+}
+
+function rememberBackend(ok, now) {
+  backendAvail = { ok, at: now };
+}
+
+/**
+ * 云端取号：POST {BACKEND_URL}/api/proxy/cookie-pick（800ms 短超时，设计稿 §1.2）。
+ * 成功 → { cookie, account_id, tag }；失败/超时/后端不可用 → null（回落 SPA 自带 cookie，现状行为）。
+ */
+async function pickAccountFromBackend(env, pan, operation) {
+  const now = Date.now();
+  if (backendKnownDown(now)) return null; // 已知不可用，5s 内不再探测
+  const base = String(env.BACKEND_URL ?? '').replace(/\/+$/, '');
+  if (!base) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 800);
+  let res;
+  try {
+    res = await fetch(`${base}/api/proxy/cookie-pick`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-proxy-token': env.PROXY_TOKEN ?? '' },
+      body: JSON.stringify({ pan, operation }),
+      signal: controller.signal,
+    });
+  } catch {
+    rememberBackend(false, now); // 超时/网络失败 → 缓存不可用
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    rememberBackend(false, now);
+    return null;
+  }
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    rememberBackend(false, now);
+    return null;
+  }
+  rememberBackend(true, now);
+  return data && typeof data === 'object' ? data : null;
+}
+
+/** D1 建表（幂等 CREATE TABLE IF NOT EXISTS；模块级标志位，首次写入时执行一次即可） */
+let d1TablesReady = false;
+let d1TablesLock = null;
+
+async function ensureD1Tables(db) {
+  if (d1TablesReady) return;
+  if (!d1TablesLock) {
+    d1TablesLock = (async () => {
+      try {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS proxy_logs (
+            id INTEGER PRIMARY KEY,
+            frontend_id TEXT,
+            ts INTEGER,
+            pan TEXT,
+            account_id INTEGER,
+            operation TEXT,
+            method TEXT,
+            url TEXT,
+            req_status INTEGER,
+            duration_ms INTEGER,
+            req_ms INTEGER,
+            client_ip TEXT,
+            via TEXT,
+            req_headers TEXT,
+            resp_headers TEXT,
+            body_preview TEXT
+          );
+          CREATE TABLE IF NOT EXISTS file_hits (
+            id INTEGER PRIMARY KEY,
+            frontend_id TEXT,
+            ts INTEGER,
+            pan TEXT,
+            account_id INTEGER,
+            client_ip TEXT,
+            fid TEXT,
+            md5 TEXT,
+            file_name TEXT,
+            size INTEGER,
+            category INTEGER
+          );
+          CREATE INDEX IF NOT EXISTS idx_fh_fid ON file_hits(fid);
+          CREATE INDEX IF NOT EXISTS idx_fh_md5 ON file_hits(md5);
+          CREATE INDEX IF NOT EXISTS idx_fh_ts ON file_hits(ts);
+        `);
+        d1TablesReady = true;
+      } finally {
+        d1TablesLock = null; // 失败也重置，下次请求重试
+      }
+    })();
+  }
+  return d1TablesLock;
+}
+
+/** consent 头 x-panhub-trace: ip-hash 存在时才哈希化 IP（sha256(ip+salt)，salt = env.IP_HASH_SALT）；否则 null */
+async function hashClientIp(request, env) {
+  if (request.headers.get('x-panhub-trace') !== 'ip-hash') return null;
+  const ip = request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip + (env.IP_HASH_SALT ?? '')));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** 响应体文件级白名单提取（fid / file_name / md5 必须；pdir_fid / size / category / obj_key 可选）；解析失败不阻断 */
+function extractFileHits(bodyText) {
+  const hits = [];
+  let parsed;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return hits;
+  }
+  if (!parsed || typeof parsed !== 'object') return hits;
+  const data = parsed.data;
+  let items = null;
+  if (Array.isArray(data)) items = data;
+  else if (data && typeof data === 'object') {
+    if (Array.isArray(data.items)) items = data.items;
+    else if (Array.isArray(data.list)) items = data.list;
+  }
+  if (!items) return hits;
+  for (const it of items) {
+    if (!it || typeof it !== 'object') continue;
+    const fid = it.fid;
+    const file_name = it.file_name;
+    const md5 = it.md5;
+    if (!fid || !file_name || !md5) continue; // 白名单三件套缺一不可
+    const hit = { fid, file_name, md5 };
+    for (const k of ['pdir_fid', 'size', 'category', 'obj_key']) {
+      if (it[k] !== undefined && it[k] !== null) hit[k] = it[k];
+    }
+    hits.push(hit);
+  }
+  return hits;
+}
+
+/**
+ * 云端两阶段 trace（设计稿 §2/§3：D1 与本地 SQLite 同构；完整 body 不落库，只落 body_preview）。
+ * 阶段一（后台立即执行）：INSERT proxy_logs（frontend_id/ts/url/operation/method/via='cloud'/client_ip）；
+ * 阶段二（complete() 后）：UPDATE（pan/account_id/req_status/req_ms/duration_ms/body_preview）+
+ *   解析响应体批量 INSERT file_hits。上游失败 complete({status:null}) → 行留 req_status NULL（看板标严重警告）。
+ * 错误分支只落 warning 日志，不阻断请求。
+ */
+function makeCloudTrace({ env, request, started, frontendId, pan, accountId, operation, method, url }) {
+  const db = env.DB;
+  let resolveComplete;
+  const completePromise = new Promise((r) => {
+    resolveComplete = r;
+  });
+  const task = (async () => {
+    let clientIp = null;
+    try {
+      clientIp = await hashClientIp(request, env);
+    } catch {
+      clientIp = null;
+    }
+    try {
+      await ensureD1Tables(db);
+      await db
+        .prepare('INSERT INTO proxy_logs (frontend_id, ts, url, operation, method, via, client_ip) VALUES (?,?,?,?,?,?,?)')
+        .bind(frontendId, started, url.slice(0, 300), operation, method, 'cloud', clientIp)
+        .run();
+    } catch (err) {
+      console.warn('[proxy] D1 trace 阶段一失败：', err?.message ?? String(err));
+    }
+    const done = await completePromise;
+    if (!done) return;
+    const { status, bodyText, reqMs, durationMs } = done;
+    try {
+      await db
+        .prepare(
+          "UPDATE proxy_logs SET pan=?, account_id=?, req_status=?, req_ms=?, duration_ms=?, body_preview=? WHERE frontend_id=? AND via='cloud'",
+        )
+        .bind(pan, accountId, status, reqMs, durationMs, (bodyText ?? '').slice(0, 500), frontendId)
+        .run();
+    } catch (err) {
+      console.warn('[proxy] D1 trace 阶段二 UPDATE 失败：', err?.message ?? String(err));
+    }
+    try {
+      const hits = extractFileHits(bodyText ?? '');
+      for (const h of hits) {
+        await db
+          .prepare(
+            'INSERT INTO file_hits (frontend_id, ts, pan, account_id, client_ip, fid, md5, file_name, size, category) VALUES (?,?,?,?,?,?,?,?,?,?)',
+          )
+          .bind(frontendId, started, pan, accountId, clientIp, h.fid, h.md5, h.file_name, h.size ?? null, h.category ?? null)
+          .run();
+      }
+    } catch (err) {
+      console.warn('[proxy] D1 trace 阶段二 file_hits 失败：', err?.message ?? String(err));
+    }
+  })();
+  return {
+    done: task,
+    complete(data) {
+      resolveComplete(data);
+    },
+  };
+}
+
 /** OPTIONS 预检：SPA 与代理跨域部署时（如 SPA 在 GitHub Pages）需要 */
 export function onRequestOptions() {
   return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
 
 export async function onRequestPost(context) {
-  const { request, env } = context;
+  const { request, env, ctx } = context;
+  const started = Date.now();
 
   const denied = checkToken(request, env);
   if (denied) return denied;
@@ -136,7 +374,7 @@ export async function onRequestPost(context) {
   const limited = checkRateLimit(request);
   if (limited) return limited;
 
-  // 解析代理协议体 { url, method, headers, body }（见 docs/transport.md §代理协议）
+  // 解析代理协议体 { url, method, headers, body, frontend_id? }（见 docs/transport.md §代理协议）
   let payload;
   try {
     payload = await request.json();
@@ -146,6 +384,10 @@ export async function onRequestPost(context) {
   if (!payload || typeof payload !== 'object' || typeof payload.url !== 'string') {
     return json(400, { error: 'BAD_BODY', message: '缺少 url 字段' });
   }
+
+  // v1.2.2：请求级 ID（可选字段，缺失不报错；服务端 trace 用它关联两阶段写入，缺失时兜底生成）
+  const frontendId =
+    typeof payload.frontend_id === 'string' && payload.frontend_id ? payload.frontend_id : crypto.randomUUID();
 
   // 目标 URL 校验：仅 http(s) + 白名单域 + 无内嵌凭据
   let target;
@@ -174,8 +416,26 @@ export async function onRequestPost(context) {
   if (body && body.length > MAX_BODY_BYTES) {
     return json(413, { error: 'BODY_TOO_LARGE', message: `body 超过 ${MAX_BODY_BYTES} 字节` });
   }
-  if (method === 'GET') {
-    // GET 不转发 body（浏览器 fetch 会直接抛错）
+
+  // v1.2.2：网盘 × 操作分类（云端取号 + D1 trace 共用；纯字符串判断，无 env 时无任何副作用）
+  const pan = panOfHostname(target.hostname);
+  const operation = classifyOperation(target.href);
+
+  // v1.2.2 云端取号（仅 env.BACKEND_URL 存在 + pan + operation==='prase'；scan 保持游客，与本地 hop 语义一致）：
+  // 成功 → cookie 追加进转发头（保留 SPA 自带 cookie 的合并逻辑）+ 记住 tag/account_id；
+  // 失败/超时/后端不可用 → 照旧用 SPA 自带 cookie（= 现状行为）。
+  let accountTag = null;
+  let accountId = null;
+  if (env.BACKEND_URL && pan && operation === 'prase') {
+    const pick = await pickAccountFromBackend(env, pan, operation);
+    if (pick && typeof pick.cookie === 'string' && pick.cookie) {
+      accountTag = typeof pick.tag === 'string' && pick.tag ? pick.tag : null;
+      accountId = typeof pick.account_id === 'number' ? pick.account_id : null;
+      const merged = {};
+      for (const [k, v] of Object.entries(payload.headers ?? {})) merged[k.toLowerCase()] = v;
+      merged.cookie = merged.cookie ? `${merged.cookie}; ${pick.cookie}` : pick.cookie;
+      payload.headers = merged;
+    }
   }
 
   // 转发（丢弃 cookie/authorization，只留白名单头；无 UA 兜底避免被网盘风控误判）
@@ -185,13 +445,25 @@ export async function onRequestPost(context) {
     ...(body && method !== 'GET' ? { body } : {}),
   };
 
+  // v1.2.2 D1 trace（仅 env.TRACE_D1 === '1' && env.DB；本地 launcher 生成的 .dev.vars TRACE_D1=0 天然不触发）
+  let trace = null;
+  if (env.TRACE_D1 === '1' && env.DB) {
+    trace = makeCloudTrace({ env, request, started, frontendId, pan, accountId, operation, method, url: target.href });
+    ctx.waitUntil(trace.done);
+  }
+
   // 超时：AbortController + 手动计时（兼容性优先）
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  const fetchStartedAt = Date.now();
   let upstream;
   try {
     upstream = await fetch(target.toString(), { ...upstreamInit, signal: controller.signal });
   } catch (err) {
+    if (trace) {
+      // 上游失败：complete({status:null}) → 行留 req_status NULL（看板标严重警告）；两阶段天然留痕，不做错误分支处理
+      trace.complete({ status: null, bodyText: '', reqMs: 0, durationMs: Date.now() - started });
+    }
     return json(502, {
       error: 'UPSTREAM_FAILED',
       message: err instanceof Error && err.name === 'AbortError'
@@ -200,6 +472,18 @@ export async function onRequestPost(context) {
     });
   } finally {
     clearTimeout(timer);
+  }
+
+  // 响应体统一缓冲（API JSON 小流量；顺带给 trace 提供 body_preview / file_hits 提取源，完整 body 不落库）
+  let bodyText;
+  try {
+    bodyText = await upstream.text();
+  } catch {
+    bodyText = '';
+  }
+  const now = Date.now();
+  if (trace) {
+    trace.complete({ status: upstream.status, bodyText, reqMs: now - fetchStartedAt, durationMs: now - started });
   }
 
   // 原样透传状态码 + body（API JSON）；content-type 保留
@@ -217,5 +501,10 @@ export async function onRequestPost(context) {
     const m = (upstream.headers.get('set-cookie') ?? '').match(new RegExp(`(?:^|,)\\s*${name}=([^;,\\s]*)`));
     if (m) respHeaders[`x-quark-${name.replace(/^__/, '')}`] = m[1];
   }
-  return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
+  // v1.2.2：命中代理托管账号 → 回传标签（SPA 展示「代理托管账号」，不暴露 cookie 明文）
+  // 与本地 hop 同一约定：encodeURIComponent（兼容 Node http 非 ASCII 头限制）
+  if (accountTag) {
+    respHeaders['x-panhub-account'] = encodeURIComponent(accountTag);
+  }
+  return new Response(bodyText, { status: upstream.status, headers: respHeaders });
 }

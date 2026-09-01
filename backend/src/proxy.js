@@ -1,43 +1,33 @@
 /**
- * 核心转发（docs/selfhost-node.md §4.1/§4.2）—— 与 CF 版 functions/api/proxy.js 协议完全兼容
+ * 增强 hop（docs/backend-wrangler-plan.md §3/§4 重构，v1.2.2 trace v2）
  *
- * POST /api/proxy { url, method, headers, body }
- * 校验顺序：X-Proxy-Token（timingSafeEqual）→ scheme/白名单 → （可选）限频 → 转发
- * 响应：原样透传状态码 + body + content-type；CORS *；回传头 x-pugs / x-quark-pus / x-quark-puus
+ * backend 的 /api/proxy 不是转发实现，是**增强 hop**：
+ *   token 校验 → 账号注入 → 转发 wrangler（wrangler 执行 functions/api/proxy.js
+ *   全部校验：token/白名单/限频，转发代码唯一一份）→ set-cookie 合并回账号池
+ *   → 两阶段 trace（v1.2.2 §3）落库
  *
- * 本地版多出的能力：
- * - 完整响应头记录（脱敏版进 DB + 完整版进 data/tmp/debug-*.log）
- * - Set-Cookie 自动合并回账号池（cookies.mergeSetCookies，与 SPA mergeQuarkSetCookies 同构）
- * - 调用级 proxy_logs（数据看板数据源）
+ * trace v2（两阶段写入，§3）：
+ *   阶段一（请求开始）：INSERT(proxy_logs: frontend_id, ts, url, operation, method, client_ip, via)
+ *   阶段二（转发完成）：UPDATE(pan, account_id, req_status, req_ms, duration_ms, body_preview)
+ *                     + 批量 INSERT(file_hits)（文件级 fid/md5/name/size，§2.2 白名单）
+ *   req_body / resp_body 列保留但不再写入（防磁盘膨胀；完整 body 只进 data/tmp/debug-*.log）
+ *   上游挂/中途失败：行留在 req_status IS NULL → 看板标严重警告（错误分支不做处理，天然留痕）
+ *
+ * 边界（设计稿 §2.2 硬约束）：
+ * - 校验策略（token/白名单/限频）只属于 functions/api/proxy.js —— 这里不重复实现白名单/限频
+ * - 这里只校验 X-Proxy-Token（timingSafeEqual，与 wrangler 同一把 token，防恶意网页直打 127.0.0.1）
+ * - 不直连上游：所有请求经 wrangler（本机 loopback ~1ms，换来 wrangler 面板可见流量）
+ *
+ * IP 隐私（§8）：默认不采集（空串）；请求头带 x-panhub-trace: ip-hash 时存 sha256(clientIp + secret.key hex)
  */
-import { request as httpsRequest } from 'node:https';
-import { request as httpRequest } from 'node:http';
-import { createHash } from 'node:crypto';
-import { getConfig } from './config.js';
+import { createHash, randomUUID } from 'node:crypto';
+import { getConfig, loadSecretKey } from './config.js';
 import { verifyProxyToken } from './auth.js';
-import { log } from './log.js';
-import { getDb, audit } from './db.js';
-import { pickAccountForPan, mergeSetCookies, CREDENTIAL_KEYS } from './cookies.js';
+import { log, writeDebugTrace } from './log.js';
+import { getDb, audit, findHost } from './db.js';
+import { pickAccountForPan, mergeSetCookies, accountTag } from './cookies.js';
 
-const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'DELETE'];
-const MAX_BODY_BYTES = 1024 * 1024;
-const UPSTREAM_TIMEOUT_MS = 20_000;
-
-/** IP 限频（内存滑动窗口；0 = 关） */
-const rateBuckets = new Map(); // ip -> number[]
-
-function rateLimited(ip, perMin) {
-  if (!perMin || perMin <= 0) return false;
-  const now = Date.now();
-  const arr = (rateBuckets.get(ip) ?? []).filter((t) => now - t < 60_000);
-  if (arr.length >= perMin) {
-    rateBuckets.set(ip, arr);
-    return true;
-  }
-  arr.push(now);
-  rateBuckets.set(ip, arr);
-  return false;
-}
+const UPSTREAM_TIMEOUT_MS = 25_000;
 
 /** URL 特征 → 操作分类（scan | prase | other；与 SPA 术语一致） */
 function classifyOperation(url) {
@@ -46,196 +36,254 @@ function classifyOperation(url) {
   return 'other';
 }
 
+/** host → pan：内置后缀 + hosts 表（host 只增不减）双通道 */
 function panOfHostname(hostname) {
-  if (hostname.endsWith('uc.cn')) return 'uc';
-  if (hostname.endsWith('quark.cn')) return 'quark';
-  return null;
+  const h = String(hostname ?? '').toLowerCase();
+  if (h.endsWith('uc.cn')) return 'uc';
+  if (h.endsWith('quark.cn')) return 'quark';
+  const mapped = findHost(h);
+  return mapped ? mapped.pan : null;
 }
 
-/** 脱敏：已知凭据名的值 → SHA-256 前缀（DB 存脱敏版） */
-function redactHeaders(headers) {
-  const out = {};
-  for (const [k, v] of Object.entries(headers ?? {})) {
-    const lk = k.toLowerCase();
-    if (lk === 'cookie' || lk === 'set-cookie') {
-      // cookie 头：逐项脱敏已知凭据；未知项保留名称 + 长度
-      if (lk === 'set-cookie') {
-        out[k] = (Array.isArray(v) ? v : [v]).map((sc) => {
-          const eq = sc.indexOf('=');
-          const name = eq > 0 ? sc.slice(0, eq).trim() : sc.slice(0, 16);
-          const rest = eq > 0 ? sc.slice(eq) : '';
-          return CREDENTIAL_KEYS.includes(name) ? `${name}=sha256:${sha256(sc)}` : `${name}${rest.length > 0 ? '=<len:' + sc.length + '>' : ''}`;
-        });
-        continue;
-      }
-      out[k] = String(v)
-        .split(';')
-        .map((pair) => {
-          const eq = pair.indexOf('=');
-          if (eq <= 0) return pair;
-          const name = pair.slice(0, eq).trim();
-          return CREDENTIAL_KEYS.includes(name) ? `${name}=sha256:${sha256(pair.slice(eq + 1).trim())}` : pair;
-        })
-        .join('; ');
-      continue;
-    }
-    out[k] = v;
+/* ---------------- IP 哈希化（§8：默认不采集；x-panhub-trace: ip-hash 时启用） ---------------- */
+
+/** salt = secret.key 内容 hex（进程内缓存；与 cookie 加密同密钥文件） */
+let ipSalt = null;
+function clientIpHash(clientIp) {
+  if (ipSalt === null) ipSalt = loadSecretKey().toString('hex');
+  return createHash('sha256').update(String(clientIp ?? '') + ipSalt).digest('hex');
+}
+
+/* ---------------- file_hits 提取（v1.2.2 §2.2 白名单） ---------------- */
+
+/**
+ * 从上游响应 JSON 提取文件列表（批量 N 文件 = N 行 file_hits）。
+ * 白名单：fid / file_name / md5（必须，至少 fid 或 md5 其一可追溯才保留）、size / category（可选）；
+ * pdir_fid / obj_key 可选但表内无列（不落库）；OSS 直链 / thumbnail / preview / _extra 一律丢弃。
+ * 解析失败 → 返回 []（try/catch 不阻断请求）。
+ * 响应形状（与 src/adapters/quark 对齐）：
+ *   scan  (sharepage/detail)：{ data: { list: [{ fid, file_name, size, category, ... }] } }
+ *   prase (file/download)   ：{ data: [{ md5, file_name, size, ... }] }（数组与请求体 fids 按序对应）
+ */
+function extractFileHits(bodyText, reqBody) {
+  if (typeof bodyText !== 'string' || bodyText.length === 0) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return [];
+  }
+  const data = parsed?.data;
+  if (!data || typeof data !== 'object') return [];
+  const out = [];
+  const seen = new Set();
+  const collect = (item, fallbackFid) => {
+    if (!item || typeof item !== 'object') return;
+    const fid = item.fid ?? fallbackFid ?? null;
+    const md5 = item.md5 ?? null;
+    const file_name = item.file_name ?? null;
+    if (!fid && !md5) return; // 无可追溯 key（fid/md5 都无）→ 丢弃
+    const dedupeKey = `${String(fid ?? '')}|${String(md5 ?? '')}|${String(file_name ?? '')}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    out.push({
+      fid: fid != null ? String(fid).slice(0, 200) : null,
+      md5: md5 != null ? String(md5).slice(0, 64) : null,
+      file_name: file_name != null ? String(file_name).slice(0, 255) : null,
+      size: Number.isFinite(Number(item.size)) && Number(item.size) >= 0 ? Number(item.size) : null,
+      category: Number.isFinite(Number(item.category)) ? Number(item.category) : null,
+    });
+  };
+  if (Array.isArray(data)) {
+    // prase：download 响应 data 是数组；请求体 fids 按序对应（适配层同序映射）
+    const fids = Array.isArray(reqBody?.fids) ? reqBody.fids : [];
+    data.forEach((item, i) => collect(item, fids[i] ?? null));
+  } else if (Array.isArray(data.list)) {
+    // scan：detail 响应 data.list
+    for (const item of data.list) collect(item);
+  } else if (Array.isArray(data.files)) {
+    for (const item of data.files) collect(item);
   }
   return out;
 }
 
-function sha256(s) {
-  return createHash('sha256').update(String(s)).digest('hex').slice(0, 16);
+/** 批量 INSERT file_hits（单事务；返回插入行数） */
+function insertFileHits(rows, frontendId, ts, pan, accountId, clientIp) {
+  if (rows.length === 0) return 0;
+  const db = getDb();
+  const stmt = db.prepare(
+    'INSERT INTO file_hits (frontend_id, ts, pan, account_id, client_ip, fid, md5, file_name, size, category) VALUES (?,?,?,?,?,?,?,?,?,?)',
+  );
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) stmt.run(frontendId, ts, pan, accountId, clientIp, r.fid, r.md5, r.file_name, r.size, r.category);
+    db.exec('COMMIT');
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
+  return rows.length;
 }
 
-/** 单次转发（返回 { status, headers, body, durationMs, upstreamHeaders }） */
-async function forward(payload) {
-  const url = new URL(payload.url);
-  const method = String(payload.method ?? 'GET').toUpperCase();
-  const headers = { ...(payload.headers ?? {}) };
-  const body = payload.body ?? null;
-  const mod = url.protocol === 'https:' ? httpsRequest : httpRequest;
-  const started = Date.now();
-  return new Promise((resolve, reject) => {
-    const req = mod(
-      url,
-      {
-        method,
-        headers,
-        timeout: UPSTREAM_TIMEOUT_MS,
-      },
-      (res) => {
-        const chunks = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () => {
-          const bodyBuf = Buffer.concat(chunks);
-          resolve({
-            status: res.statusCode,
-            headers: res.headers,
-            body: bodyBuf.toString('utf8').slice(0, MAX_BODY_BYTES),
-            fullBody: bodyBuf,
-            durationMs: Date.now() - started,
-          });
-        });
-      },
-    );
-    req.on('timeout', () => {
-      req.destroy(new Error(`上游超时（${UPSTREAM_TIMEOUT_MS / 1000}s 封顶）`));
+/** 转发到 wrangler（唯一转发实现 functions/api/proxy.js 在 wrangler 侧执行） */
+async function forwardToWrangler(payload, proxyToken) {
+  const cfg = getConfig();
+  const url = `http://127.0.0.1:${cfg.wrangler.port}/api/proxy`;
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-proxy-token': proxyToken },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
-    req.on('error', (err) => reject(err));
-    if (body) req.write(body);
-    req.end();
+  } catch (err) {
+    const reason = err?.name === 'TimeoutError' ? `wrangler 超时（>${UPSTREAM_TIMEOUT_MS / 1000}s）` : `wrangler 不可达（${err?.message ?? err}）`;
+    throw new Error(`${reason} —— 请确认 wrangler 已启动（launcher start/debug）`);
+  }
+  const body = await res.text();
+  const headers = {};
+  // 剥 hop-by-hop 头：undici 自动解压响应体，但 content-encoding/content-length 等头仍留在 headers 里
+  // → 透传后下游拿到「gzip 头 + 明文 body」，浏览器/undici 解压直接报错（实测 incorrect header check）
+  const HOP_HEADERS = new Set(['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'keep-alive', 'upgrade', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer']);
+  res.headers.forEach((v, k) => {
+    if (!HOP_HEADERS.has(k)) headers[k] = v;
   });
+  const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : [];
+  return { status: res.status, headers, setCookies, body };
 }
 
 /**
- * 处理 POST /api/proxy（proxy listener 路由）。
- * @param reqBody 已解析的 JSON body
- * @param clientIp 直连 remoteAddress（XFF 不可信）
- * @param proxyToken X-Proxy-Token 请求头值（与 CF 版同规格）
+ * 处理 POST /api/proxy（单 listener 路由）。
+ * @param reqBody 已解析的 JSON body（{ url, method, headers, body, frontend_id? }，与 proxy.js 协议一致）
+ * @param clientIp 直连 remoteAddress（XFF 不可信，仅哈希/落库）
+ * @param proxyToken X-Proxy-Token 请求头值（与 wrangler 同一把令牌）
+ * @param traceHeader x-panhub-trace 请求头值（含 ip-hash → client_ip 哈希化存储）
  * @returns Response 兼容对象 { status, headers, body }
  */
-export async function handleProxy(reqBody, clientIp, proxyToken) {
-  const cfg = getConfig();
+export async function handleProxy(reqBody, clientIp, proxyToken, traceHeader = '') {
   const started = Date.now();
-  const fail = (status, message) => ({ status, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: status === 401 ? 'UNAUTHORIZED' : status === 403 ? 'DOMAIN_NOT_ALLOWED' : status === 429 ? 'RATE_LIMITED' : 'BAD_REQUEST', message }) });
+  const fail = (status, message) => ({ status, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: status === 401 ? 'UNAUTHORIZED' : 'HOP_ERROR', message }) });
 
-  // ① 令牌（timingSafeEqual）
+  // ① 令牌（timingSafeEqual；与 wrangler 同一把）
   if (!verifyProxyToken(proxyToken)) {
-    audit('proxy.reject', `token 无效 from ${clientIp}`, 'proxy');
-    log('warn', `proxy：令牌无效，拒绝（${clientIp}）`);
+    audit('proxy.reject', `token 无效 from ${clientIp}`, 'hop');
+    log('warn', `hop：令牌无效，拒绝（${clientIp}）`);
     return fail(401, 'X-Proxy-Token 无效');
   }
-  // ② URL 合法性 + 白名单
+  if (!reqBody || typeof reqBody !== 'object' || typeof reqBody.url !== 'string' || !reqBody.url) {
+    return fail(400, '请求体必须是 { url, method, headers, body }');
+  }
+
+  // ② URL 解析 + 网盘 × 操作分类（仅用于账号注入决策，不做白名单校验——那是 wrangler 的事）
   let target;
   try {
     target = new URL(reqBody.url);
   } catch {
     return fail(400, 'url 不是合法 URL');
   }
-  if (!['http:', 'https:'].includes(target.protocol)) return fail(400, '仅支持 http(s) 目标');
-  if (target.username || target.password) return fail(400, 'url 不允许携带用户名/密码');
-  if (!cfg.whitelist.some((s) => target.hostname === s || target.hostname.endsWith(`.${s}`))) {
-    audit('proxy.reject', `域名不在白名单：${target.hostname}`, 'proxy');
-    log('warn', `proxy：域名不在白名单，拒绝 ${target.hostname}`);
-    return fail(403, `目标域名不在白名单：${target.hostname}`);
-  }
-  const method = String(reqBody.method ?? 'GET').toUpperCase();
-  if (!ALLOWED_METHODS.includes(method)) return fail(405, `仅支持 ${ALLOWED_METHODS.join('/')}`);
-  // ③ 限频（可选）
-  if (rateLimited(clientIp, cfg.proxy.rateLimitPerMin)) {
-    audit('proxy.reject', `限频 ${clientIp}`, 'proxy');
-    log('warn', `proxy：限频触发，拒绝 ${clientIp}`);
-    return fail(429, `请求过于频繁（${cfg.proxy.rateLimitPerMin}/min/IP）`);
-  }
-
-  // ④ 按网盘注入账号池 cookie（v1 分流：仅 prase/download 注入登录态，scan 保持游客——
-  //    对齐 split 插件默认矩阵；后续 split 插件接管这里做三维调控）
   const pan = panOfHostname(target.hostname);
   const operation = classifyOperation(target.href);
-  let accountId = null;
-  // 请求头键归一化为小写（SPA 侧发 'Content-Type'/'Cookie' 大写；归一后注入键 cookie 自然生效，
-  // 避免上游收到 Cookie/cookie 重复头或丢失登录态 —— 与 CF 版 forwardHeaders 同一修复）
+  const method = String(reqBody.method ?? 'GET').toUpperCase();
+
+  // ②.5 阶段一写入（trace v2 §3）：请求开始 INSERT —— frontend_id / ts / url / operation / method / client_ip / via
+  const frontendId = typeof reqBody.frontend_id === 'string' && reqBody.frontend_id ? reqBody.frontend_id : randomUUID();
+  const clientIpStored = String(traceHeader ?? '').toLowerCase().includes('ip-hash') ? clientIpHash(clientIp) : '';
+  let logRowId = null;
+  try {
+    const info = getDb()
+      .prepare('INSERT INTO proxy_logs (frontend_id, ts, url, operation, method, client_ip, via) VALUES (?,?,?,?,?,?,?)')
+      .run(frontendId, started, target.href.slice(0, 300), operation, method, clientIpStored, 'hop');
+    logRowId = Number(info.lastInsertRowid);
+  } catch (err) {
+    log('error', `hop：阶段一落库失败 — ${err.message}`);
+  }
+
+  // ③ 账号注入（v1 分流矩阵：prase/download 注入登录态，scan 保持游客；
+  //    无正式账号时回退 guest 账号——随机 __pugs 占位，label guest#xxx 可追溯）
   const outHeaders = {};
   for (const [k, v] of Object.entries(reqBody.headers ?? {})) outHeaders[k.toLowerCase()] = v;
+  let hit = null; // { account, tag }
   if (pan && operation === 'prase') {
-    const hit = pickAccountForPan(pan);
+    hit = pickAccountForPan(pan, operation);
     if (hit) {
-      accountId = hit.account.id;
       const prev = outHeaders.cookie ? `${outHeaders.cookie}; ` : '';
       outHeaders.cookie = prev + hit.cookieString;
     }
   }
 
-  // ⑤ 转发
+  // ④ 转发 wrangler（原样透传协议体；req_ms = 上游耗时）
+  const forwardStart = Date.now();
   let upstream;
   try {
-    upstream = await forward({ url: target.href, method, headers: outHeaders, body: reqBody.body ?? null });
-  } catch (err) {
-    log('error', `proxy：转发失败 ${target.hostname} — ${err.message}`);
-    return { status: 502, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: 'UPSTREAM_ERROR', message: err.message }) };
-  }
-
-  // ⑥ 响应头处理：透传指定头 + 回传凭据头；set-cookie 合并回账号池
-  const respHeaders = {
-    'content-type': upstream.headers['content-type'] ?? 'application/octet-stream',
-    'access-control-allow-origin': '*',
-    'access-control-expose-headers': 'x-pugs, x-quark-pus, x-quark-puus',
-  };
-  const setCookies = upstream.headers['set-cookie'] ?? [];
-  if (pan && setCookies.length > 0) {
-    mergeSetCookies(pan, setCookies);
-    // 回传给 SPA（与 CF 版同规格：只回传这几个凭据键，其余 set-cookie 不回）
-    const passthrough = {
-      quark: ['__pus', '__puus'],
-      uc: ['__pugs'],
-    }[pan] ?? [];
-    for (const sc of setCookies) {
-      const eq = sc.indexOf('=');
-      const name = eq > 0 ? sc.slice(0, eq).trim() : '';
-      if (passthrough.includes(name)) {
-        const value = sc.slice(eq + 1).split(';')[0].trim();
-        if (value) respHeaders[pan === 'quark' ? `x-quark-${name.slice(2)}` : 'x-pugs'] = value;
-      }
-    }
-  }
-
-  // ⑦ 记录：脱敏进 DB（proxy_logs）+ 完整头进 debug 文件
-  try {
-    const db = getDb();
-    db.prepare(
-      'INSERT INTO proxy_logs (ts, pan, operation, method, url, req_status, duration_ms, account_id, queued_ms, client_ip, req_headers, resp_headers, body_preview) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-    ).run(
-      started, pan, operation, method, target.href.slice(0, 300), upstream.status, upstream.durationMs, accountId, 0, clientIp,
-      JSON.stringify(redactHeaders(outHeaders)).slice(0, 2000),
-      JSON.stringify(redactHeaders(upstream.headers)).slice(0, 4000),
-      Buffer.isBuffer(upstream.fullBody) ? upstream.fullBody.toString('utf8').slice(0, 500) : '',
+    upstream = await forwardToWrangler(
+      { url: target.href, method, headers: outHeaders, body: reqBody.body ?? null },
+      proxyToken,
     );
-    log('debug', `proxy：${operation} ${pan ?? ''} ${method} ${target.hostname} → ${upstream.status}（${upstream.durationMs}ms${accountId ? `，账号#${accountId}` : ''}）`, {
-      pan, operation, durationMs: upstream.durationMs, accountId,
+  } catch (err) {
+    log('error', `hop：wrangler 转发失败 — ${err.message}`);
+    return { status: 502, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: 'WRANGLER_UNAVAILABLE', message: err.message }) };
+  }
+  const reqMs = Date.now() - forwardStart;
+  const durationMs = Date.now() - started;
+
+  // ⑤ set-cookie 合并回账号池（仅正式账号；guest 占位不参与）+ 回传凭据头
+  // 注意：wrangler proxy.js 不回传原始 set-cookie 头，只回传提取值（x-quark-pus/x-quark-puus/x-pugs）
+  // → 账号池合并以回传头为准（PAN_KEYS 白名单：quark=__pus/__uid/__puus；__pugs 不在白名单天然跳过）
+  const setCookies = upstream.setCookies;
+  const headerPatches = [];
+  for (const [key, hv] of [['__pus', upstream.headers['x-quark-pus']], ['__puus', upstream.headers['x-quark-puus']]]) {
+    if (hv) headerPatches.push(`${key}=${hv}`);
+  }
+  if (pan && (setCookies.length > 0 || headerPatches.length > 0)) {
+    mergeSetCookies(pan, [...setCookies, ...headerPatches]);
+  }
+
+  // ⑥ 响应头组装：透传 wrangler 的 CORS/凭据回传头 + 命中账号标识
+  const respHeaders = { ...upstream.headers };
+  // v1.2.2 集成修复：中文账号标签必须 encodeURIComponent —— Node http 会丢弃/乱码非 ASCII 响应头
+  if (hit?.tag) respHeaders['x-panhub-account'] = encodeURIComponent(hit.tag);
+
+  // ⑦ 阶段二写入（trace v2 §3）：UPDATE 请求行 + 批量 file_hits + debug 文件（完整 body）
+  try {
+    const reqBodyText = typeof reqBody.body === 'string' ? reqBody.body : '';
+    const files = extractFileHits(upstream.body, reqBody);
+    const db = getDb();
+    if (logRowId != null) {
+      db.prepare('UPDATE proxy_logs SET pan=?, account_id=?, req_status=?, req_ms=?, duration_ms=?, body_preview=? WHERE id=?')
+        .run(pan, hit?.account?.id ?? null, upstream.status, reqMs, durationMs, upstream.body.slice(0, 500), logRowId);
+    }
+    const inserted = insertFileHits(files, frontendId, started, pan, hit?.account?.id ?? null, clientIpStored);
+    writeDebugTrace({
+      via: 'hop',
+      ts: started,
+      durationMs,
+      reqMs,
+      frontendId,
+      clientIp,
+      clientIpStored,
+      pan,
+      operation,
+      method,
+      url: target.href,
+      account: hit ? { id: hit.account.id, tag: hit.tag, kind: hit.account.kind, label: hit.account.label } : null,
+      req_headers: outHeaders,
+      req_body: reqBodyText,
+      resp_status: upstream.status,
+      resp_headers: upstream.headers,
+      resp_body: upstream.body,
+      set_cookies: setCookies,
+      file_hits: files,
+    });
+    log('info', `hop：${operation} ${pan ?? ''} ${method} ${target.hostname} → ${upstream.status}（${durationMs}ms / 上游 ${reqMs}ms${hit ? `，账号 ${hit.tag}` : ''}${inserted ? `，文件 ${inserted} 个` : ''}）`, {
+      pan, operation, durationMs, accountId: hit?.account?.id ?? null,
     });
   } catch (err) {
-    log('error', `proxy：落库失败 — ${err.message}`);
+    log('error', `hop：阶段二落库失败 — ${err.message}`);
   }
 
   return { status: upstream.status, headers: respHeaders, body: upstream.body };

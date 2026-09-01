@@ -67,9 +67,23 @@ export interface GopeedBatchPayload {
  * 生成 Gopeed REST 批量添加任务 payload（v1.1.8 抽取：导出 JSON 与 API 直推共用；
  * v1.1.8.1 改 REST 格式）。
  * 下载凭据（§12 同响应绑定，UC = __pugs）：有则注入 req.extra.header.Cookie，无则不带 extra。
+ * v1.1.9.final：options.gopeedExtra（设置 → 高级功能）为合法 JSON 对象时合并进每个任务 opts
+ * （如 {"connections":16}；Gopeed opts 接受连接数等选项；非 JSON/非对象忽略）。
  */
 export function buildGopeedTasks(files: ExportFile[], options: TaskOptions): GopeedBatchPayload {
   const baseDir = options.outDir ?? '';
+  // 额外 opts（v1.1.9.final）：JSON 对象才合并，其他一律忽略（避免脏数据进任务）
+  let extraOpts: Record<string, unknown> | null = null;
+  if (options.gopeedExtra && typeof options.gopeedExtra === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(options.gopeedExtra);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        extraOpts = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // 非 JSON：忽略（用户输入错误不阻塞导出）
+    }
+  }
   const reqs = files.map((f) => {
     const relDir = dirNameOf(f.path);
     let path: string;
@@ -86,6 +100,7 @@ export function buildGopeedTasks(files: ExportFile[], options: TaskOptions): Gop
       opts: {
         name: fileNameOf(f.path),
         path,
+        ...(extraOpts ? { ...extraOpts } : {}),
       },
     };
   });

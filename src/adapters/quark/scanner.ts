@@ -30,6 +30,7 @@ import {
   capturePugsFromHeaders,
   cookieValueOf,
   getQuarkCookieString,
+  getQuarkPugs,
   mergeQuarkSetCookies,
   setQuarkCookieString,
 } from './cookies';
@@ -101,7 +102,9 @@ async function request<T, M = unknown>(
   }
   // v1.1.9.1：登录态 __pus/__puus 服务端会定期刷新（__puus 3h 会话）——
   // 代理回传 x-quark-pus/x-quark-puus，这里自动合并回本地整串（alist 同款）
-  if (res.headers['x-quark-pus'] || res.headers['x-quark-puus']) {
+  // v1.2.2 微调：代理托管模式（selfhost）下 set-cookie 由 backend 账号池合并（保险箱语义），
+  // 前端不复用/合并（拿不到新 set-cookie 也没有意义），直接跳过
+  if ((res.headers['x-quark-pus'] || res.headers['x-quark-puus']) && getActiveTransport().id !== 'proxy') {
     const merged = mergeQuarkSetCookies(getQuarkCookieString(), res.headers);
     if (merged !== getQuarkCookieString()) setQuarkCookieString(merged);
   }
@@ -244,8 +247,16 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
   }
   // §12 同响应绑定：本次调用开始时重置，只有本次响应的 __pugs 才能配本次的直链
   lastResponsePugs = null;
-  // 登录态 cookie（用户弹窗提供整串，v1.1.9.1）：有则随 download 请求发送（>50MB 文件必需，23018 时必填）
-  const loginCookie = getQuarkCookieString();
+  // v1.1.9.final：游客模式（qk-guestTurn 开 + 全部 <50MB）——
+  // 不注入登录态整串（否则夸克返回登录态 CDN 直链、导出却配 __pugs → 下载掐断），
+  // 改用捕获/随机 __pugs 模拟游客（无则不带，让响应下发新的）；默认模式才用登录整串。
+  const guestMode = Boolean(params.guestMode);
+  // v1.2.2 微调：代理托管模式（selfhost）下登录态 cookie 由 backend 账号池注入（hop 合并 SPA 头），
+  // 前端 localStorage 整串不再复用（避免双份 cookie 源 + 拿不到新 set-cookie）；直连模式保持原行为
+  const inProxyMode = getActiveTransport().id === 'proxy';
+  const loginCookie = guestMode || inProxyMode ? '' : getQuarkCookieString();
+  const guestPugs = guestMode && !inProxyMode ? (getQuarkPugs() ?? '') : '';
+  const requestCookie = loginCookie || (guestPugs ? `__pugs=${guestPugs}` : '');
   const { data } = await request<QuarkDownloadItem[]>(
     `${API_BASE}/file/download?${DL_QUERY}`,
     {
@@ -255,7 +266,7 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
         // v1.1.9.final：夸克 download 校验 Electron 客户端 UA（非定制 UA → 401 unsafe-url 风控），
         // 与 linkswift 同款；浏览器禁改 User-Agent，经代理 JSON body 透传后在服务端注入（direct 模式无效）
         'User-Agent': QUARK_DL_UA,
-        ...(loginCookie ? { Cookie: loginCookie } : {}),
+        ...(requestCookie ? { Cookie: requestCookie } : {}),
       },
       body: JSON.stringify({
         fids: params.fids,

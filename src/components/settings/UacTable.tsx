@@ -168,6 +168,17 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
             placeholder="代理令牌（部署时设置的 PROXY_TOKEN，代理未设可留空）"
             onChange={(e) => setTokenDraft(e.target.value)}
           />
+          <div className="switch-row" style={{ marginTop: 8 }}>
+            <div style={{ flex: 1 }}>
+              <div className="switch-label">IP 采集（哈希化后上传）</div>
+              <div className="switch-sub">已加密后上传到 proxy，这是企业内辅助判断滥用行为的，日用不需要开</div>
+            </div>
+            <Switch
+              on={Boolean(transport.ipHashUpload)}
+              onChange={(v) => onTransportChange({ ipHashUpload: v })}
+              label="IP 采集（哈希化后上传）"
+            />
+          </div>
         </div>
       </div>
       <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
@@ -226,6 +237,20 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
         >
           保存
         </button>
+      </div>
+      {/* v1.2.2：IP 采集开关（默认关；开时 ProxyTransport 带 x-panhub-trace: ip-hash，代理端 sha256 哈希化后落库） */}
+      <div className="switch-row" style={{ marginTop: 10 }}>
+        <div style={{ flex: 1 }}>
+          <div className="switch-label">IP 采集（哈希化后上传）</div>
+          <div className="switch-sub">已加密后上传到 proxy，这是企业内辅助判断滥用行为的，日用不需要开</div>
+        </div>
+        <Switch
+          on={Boolean(transport.ipHashUpload)}
+          onChange={(v) => {
+            onTransportChange({ ipHashUpload: v });
+            setActiveTransport(transportFromPrefs({ ...transport, ipHashUpload: v }));
+          }}
+        />
       </div>
     </div>
   );

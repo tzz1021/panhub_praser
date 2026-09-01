@@ -88,3 +88,44 @@ export function fmtUptime(ms) {
   const m = Math.floor((s % 3600) / 60);
   return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${m}分${s % 60}秒`;
 }
+
+/* ================= v1.2.2 新端点封装（契约见 docs/backend-wrangler-plan.md §4） ================= */
+
+/** 基础信息（含 wrangler 健康字段：running/mode/inspectorPort/inspectorWs/lastLine） */
+export function getInfo() {
+  return api('/api/web/info');
+}
+
+/** 单次调用完整详情（脱敏完整行 + file_hits 文件级列表） */
+export function getCallDetail(id) {
+  return api(`/api/web/calls/${id}/detail`);
+}
+
+/**
+ * 重复检测（file_hits 按 fid|md5 聚合）。
+ * @param {{pan?:string, by?:'fid'|'md5', days?:number, min?:number, limit?:number}} q
+ */
+export function getAbuse(q = {}) {
+  const p = new URLSearchParams();
+  if (q.pan) p.set('pan', q.pan);
+  if (q.by) p.set('by', q.by);
+  if (q.days) p.set('days', q.days);
+  if (q.min) p.set('min', q.min);
+  if (q.limit) p.set('limit', q.limit);
+  const s = p.toString();
+  return api(`/api/web/abuse${s ? `?${s}` : ''}`);
+}
+
+/** 手动清理日志（days 省略 = 全清；两表：proxy_logs + file_hits） */
+export function purgeLogs(days) {
+  return api('/api/web/logs/purge', { method: 'POST', body: { days } });
+}
+
+/** 系统配置（notify / advanced / policy / log_retention_days） */
+export function getSettings() {
+  return api('/api/web/settings');
+}
+/** 保存系统配置（POST /api/web/settings，只提交要改的键） */
+export function postSettings(patch) {
+  return api('/api/web/settings', { method: 'POST', body: patch });
+}

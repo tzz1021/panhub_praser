@@ -96,6 +96,13 @@ table.tbl td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertic
 table.tbl tr:last-child td { border-bottom: none; }
 table.tbl tr:hover td { background: var(--bg); }
 
+/* 数据看板：严重警告行（请求未完成，req_status 为空）整行红标 */
+table.tbl tr.warn-row td { background: var(--danger-soft); }
+table.tbl tr.warn-row:hover td { background: #fee2e2; }
+/* 数据看板：展开详情行（「<>」展开，与 hover 底色区分） */
+table.tbl tr.detail-row td { background: var(--bg); }
+table.tbl tr.detail-row:hover td { background: var(--bg); }
+
 .tag {
   display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
   background: var(--primary-soft); color: var(--primary);

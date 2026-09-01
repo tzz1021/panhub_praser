@@ -15,6 +15,7 @@
 import { useRef, useState } from 'react';
 import type { JSX } from 'react';
 import type { CookieInputRequirement } from '../adapters/types';
+import { getLastProxyAccountLabel } from '../core/transport/types';
 import {
   parseCookieText,
   buildQuarkCookieString,
@@ -69,6 +70,9 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
   const [pasteText, setPasteText] = useState('');
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // v1.2.2：最近一次代理响应回传的代理托管账号（x-panhub-account，仅 label 不含 cookie 明文）；
+  // 弹窗在失败请求之后挂载，此刻拿到的即最近一次响应的值。
+  const proxyAccount = getLastProxyAccountLabel();
 
   /** 把解析结果填进输入（整串模式直接替换；多键模式按声明键合并） */
   const applyParsed = (parsed: Record<string, string>): void => {
@@ -146,6 +150,30 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
           <p style={{ margin: 0, color: 'var(--text-dim)' }}>
             <strong>{panName}</strong> 需要 cookie 鉴权，下面是本次获取到的必要 cookie 值 【如实显示】：
           </p>
+
+          {/* v1.2.2：代理托管账号提示（响应头 x-panhub-account；仅展示 label，不暴露任何 cookie 明文） */}
+          {proxyAccount && (
+            <p
+              style={{
+                margin: '8px 0 0',
+                padding: '8px 10px',
+                borderRadius: 6,
+                background: 'rgba(23,162,184,0.08)',
+                border: '1px solid rgba(23,162,184,0.35)',
+                fontSize: 12.5,
+                color: 'var(--text)',
+              }}
+            >
+              代理托管账号：<strong>{proxyAccount}</strong>
+              <span style={{ color: 'var(--text-faint)' }}>（cookie 由代理托管，不在此显示明文）</span>
+            </p>
+          )}
+          {/* v1.2.2（wip2 修正）：代理托管模式下填写仅在直连模式生效，弱化提示避免白填 */}
+          {proxyAccount && (
+            <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--text-faint)' }}>
+              当前为代理托管模式（backend 自动注入账号），此处填写的 cookie 仅直连模式使用。
+            </p>
+          )}
 
           {/* 整串模式：单个大输入框（粘贴完整 cookie，最稳）；多键模式：各 key 填写框 */}
           {wholeString ? (

@@ -59,6 +59,7 @@ export async function fetchLinks(
         stoken: ctx.stoken,
         fids,
         fidsTokens,
+        guestMode: ctx.guestMode, // v1.1.9.final：qk-guestTurn 游客模式透传
       });
       // 适配器返回与请求顺序一致（接口契约）；逐一回填，数量不足时补失败项
       indices.forEach((idx, j) => {

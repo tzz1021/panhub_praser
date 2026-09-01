@@ -5,53 +5,78 @@
 
 ## 一句话定位
 
-把「装油猴脚本」变成「拖一个书签、打开分享页点一下」——服务担心脚本安全、嫌麻烦、偶尔使用的普通玩家。
+给linkswift加上更多可能性 meow~
 
-## 零上传承诺
+## 隐私与安全承诺
 
-- **无后端、无数据库**：纯前端静态站，GitHub 托管
-- **足迹全在本地**：历史链接 / 目录树快照 / 解析记录 / 日志只写入浏览器 IndexedDB，从未离开你的设备
-- **不读你的 Cookie**：v1 UC 适配器 API 零 Cookie（隐私友好）；日志导出自动对凭据做删除线脱敏
-- **无任何埋点统计**
+- **无后端、无数据库**：怎么可能？在你本地罢了，这是CORS策略导致，被迫使用transport协议连接后端转发请求<**未涉及绕过IP限制，建议家庭使用or企业使用，不推荐购买远端服务器**>
+- **不泄露你的 Cookie**：数据全支持，后端具有一键部署脚本，小白友好。一切足迹从未离开你的设备
 
 ## 快速开始
 
-1. 打开任意 UC 网盘分享页（如 `https://drive.uc.cn/s/xxxx`）
-2. 把下面的按钮拖到书签栏：
-   ```text
-   （书签产物：build 后见 public/bookmarklet.min.js 安装说明）
-   ```
-3. 在分享页点书签 → 自动解析目录树 → 勾选文件 → 批量取直链
-4. 导出 aria2 / Gopeed 任务（可保留目录结构）或 cURL 命令，本地下载器接管
-
-> 也可以在首页直接粘贴分享链接解析（需在网盘域内执行以绕过 CORS，详见 docs/reverse-notes-uc.md §3.2）。
+1. 复制任意网盘（前提已经完成适配）分享链接
+2. 打开体验[地址](https://panhub-praser.pages.dev) Tip：如果cloudflare太慢了那就本地部署呢
+3. 输入复制好的分享链接，就会看到~~温馨的~~CORS弹窗，转到设置。代理输入体验地址，秘钥这个怎么可以随便发呢↓看看裙简介<可以不进裙丝毫不会介意>
+4. 等一会真的就好了，找一个文件直接解析（prase）也可以快速筛选，页面功能有限自己摸索就好哦
 
 ## 功能
 
 - 输入分享链接或整段分享文案（自动提取 URL 与提取码），自动识别网盘并高亮
-- 目录树遍历（递归、并发 3、目录大小聚合、失败容错），支持 |--- / 缩进两种格式
+- 目录树遍历
 - 批量直链：15 个/批 + 1s 节流（LinkSwift 同款），失败可单独重试
 - 直链有效期倒计时（OSS Expires 解析），过期一键重新获取
-- 导出：aria2 命令 / input-file（保留目录结构）/ RPC JSON、Gopeed 任务 JSON、cURL 命令、浏览器直下
-- 连接本地下载器：配置 RPC 地址 / 密钥 / 保存路径（v1 仅存配置）
-- 足迹系统（仅本地）：已填链接查重、目录树快照、解析记录、完整日志（5MB 轮转 + 脱敏）
-- 偏好设置：UAC 表（转存/登录/限速）、默认解析方式、目录树样式、足迹保留策略
+- 导出：aria2 命令 / input-file（保留目录结构）/ RPC JSON、Gopeed 任务 JSON、cURL 命令（不支持浏览器直接下载很抱歉，油猴和脚本猫使用了GM_xmlRequest）
+- 连接本地下载器：配置 RPC 地址 / 密钥 / 保存路径
+- 足迹系统（仅本地）：已填链接查重、目录树快照、解析记录、完整日志
+- 偏好设置：UAC 表（转存/登录/限速）、大量冗余石山功能
 
 ## 技术栈
 
-React 19 + TypeScript strict + Vite，零运行时依赖（无状态库/无 UI 库，手写设计系统）。
+React 19 + TypeScript strict + Vite，零运行时依赖（无状态库/UI 库，AI？？？~~PIA~~设计）。
 
 ## Wiki · 自托管与代理指南
 
-被 CORS 拦了？不想用书签？给懂技术的人准备的免费代理部署指南：
-
+这里是胡写的别看了，到scripts找到selfhost.sh执行即可自动缓存必要后端文件同时告诉你后端一键管理脚本backend/launcher.sh
 - [入口/方案对比](docs/wiki.md)（Cloudflare 白嫖 vs 自建服务端）
 - [白嫖 Cloudflare（10 分钟，10 万请求/天）](docs/wiki-cloudflare.md)
 - [自建服务端代理（Node 零依赖，数据全自持）](docs/wiki-selfhost.md)
 
+## 指挥中心（backend + 管理面板，v1.2.2）
+
+带多账号、cookie 自动刷新、可视化看板的自托管转发代理（设计稿 [docs/backend-wrangler-plan.md](docs/backend-wrangler-plan.md) v1.2.2 定稿）。
+**SPA 不本地托管**：前端走 CF/GitHub CDN 加载(也可以本地。。)
+
+### 全新机器两条命令（scripts/selfhost.sh 引导）
+
+```bash
+# 1) 拉取并运行自托管引导（交互选择：完整源码 / 管理端；codeload tarball 优先 + ghproxy 镜像兜底 + sha256 校验）
+curl -fsSL https://raw.githubusercontent.com/tzz1021/panhub_praser/master/scripts/selfhost.sh -o selfhost.sh && bash selfhost.sh
+
+# 2) 初始化并启动（自动生成端口 + 双令牌 + 根 .dev.vars）
+cd ~/panhub_praser && ./backend/launcher.sh setup && ./backend/launcher.sh start
+```
+
+### 已有源码（clone / 管理端已就绪）
+
+```bash
+./backend/launcher.sh setup    # 首次：检测 node/wrangler → 装依赖 → 生成端口+双令牌 + .dev.vars
+./backend/launcher.sh debug    # 首次排查：wrangler 真 TTY 交互面板（b/d/e/t/c/x）+ backend 后台日志（有 tmux 自动分窗）
+./backend/launcher.sh start    # 日常后台启动（B 端局域网共享：PANHUB_BIND=0.0.0.0）
+./backend/launcher.sh status / stop / restart / logs / backup / reset
+```
+
+详见 [backend/README.md](backend/README.md)。
+
+## 反馈留言
+
+这个bushi必备的，你可以直接提出issues，如果有好点子也欢迎PR
+如果只是想白嫖我的服务只能使用UC哦
+- 裙835890223<无内测通知，采集反馈与开发建议>
+- 内测开发推送[频道](https://t.me/Water_molecule)置顶消息可以进入群组交流
+
 ## 参考与致谢
 
-- 核心功能参考开源项目 [LinkSwift](https://github.com/hmjz100/LinkSwift)（API 三连、entry 参数、节流策略）
+- 核心功能参考开源项目 [LinkSwift](https://github.com/hmjz100/LinkSwift)
 - UI 部分参考 [pdpb.cn](https://pdpb.cn)（布局与配色）
 - 功能方向参考 [nfd 云解析](https://github.com/qaiu/netdisk-fast-download)（自托管思路）
 - 版权与迁移说明见 [docs/migration-linkswift.md](docs/migration-linkswift.md)

@@ -11,6 +11,7 @@ import { UacTable } from './settings/UacTable';
 import { DefaultMode } from './settings/DefaultMode';
 import { FootprintOpts } from './settings/FootprintOpts';
 import { AdvancedSettings } from './settings/AdvancedSettings';
+import { QuarkSettings } from './settings/QuarkSettings';
 
 /** 备份文件名（v1.1.7） */
 export const SETTING_BAK_FILE = 'panhub_setting_bak.json';
@@ -86,6 +87,7 @@ export function SettingsModal({ onClose }: SettingsModalProps): JSX.Element {
           <DefaultMode prefs={prefs} onChange={apply} />
           <FootprintOpts footprint={prefs.footprint} onChange={(patch) => apply({ footprint: { ...prefs.footprint, ...patch } })} />
           <AdvancedSettings advanced={prefs.advanced} onChange={(patch) => apply({ advanced: { ...prefs.advanced, ...patch } })} />
+          <QuarkSettings quark={prefs.quark} onChange={(patch) => apply({ quark: { ...prefs.quark, ...patch } })} />
         </div>
         <div className="modal-foot">
           <button

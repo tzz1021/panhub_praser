@@ -1,14 +1,17 @@
 /**
- * 系统配置：账号池（cookie）/ 白名单 / 限频 / 通知 / CDP
+ * 系统配置（v1.2.2）：账号池（cookie）/ 校验策略（proxy.js 只读）/ 通知与高级 / 日志
  *
  * 账号池字段名与 SPA CookieInputModal 对齐（v1.2 约定，勿改）：
  * - pan：'quark' | 'uc'（= src/adapters/registry.ts 的 adapter id）
  * - quark：整串 cookie（关键 key __pus / __uid / __puus，与 quark/cookies.ts 一致）
  * - uc：__pugs（下载层游客态凭据，208 字符）
- * 高危操作（账号池增删改 / 白名单增删）→ 二次输入 WebUI 令牌确认（秘钥语义）。
+ * 高危操作（账号池增删改）→ 二次输入 WebUI 令牌确认（秘钥语义）。
+ *
+ * v1.2.2 变更：白名单/限频校验归 functions/api/proxy.js（backend 只读展示 policy）；
+ * 日志：保留天数 log_retention_days（定时清理重启后生效）+ 手动清理（立即生效）。
  */
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { api, fmtTime } from '../api.js';
+import { api, fmtTime, getSettings, postSettings, purgeLogs } from '../api.js';
 
 const PAN_KEYS = { quark: ['__pus', '__uid', '__puus'], uc: ['__pugs'] };
 
@@ -98,7 +101,7 @@ function AccountForm({ initial, panKeys, onDone, toast }) {
 }
 
 export default function Settings({ toast }) {
-  const [tab, setTab] = useState('accounts');
+  const [tab, setTab] = useState('accounts'); // accounts | policy | misc | logs
   const [accounts, setAccounts] = useState(null);
   const [settings, setSettings] = useState(null);
   const [form, setForm] = useState(null); // null | { id?, ... } | 'new'
@@ -108,8 +111,11 @@ export default function Settings({ toast }) {
     if (r.ok) setAccounts(r.data);
   };
   const loadSettings = async () => {
-    const r = await api('/api/web/settings');
-    if (r.ok) setSettings(r.data);
+    const r = await getSettings();
+    if (r.ok) {
+      setSettings(r.data);
+      if (r.data.log_retention_days != null) setLogDays(r.data.log_retention_days);
+    }
   };
   useEffect(() => { loadAccounts(); loadSettings(); }, []);
 
@@ -119,25 +125,41 @@ export default function Settings({ toast }) {
     if (r.ok) { toast('账号已删除', 'ok'); loadAccounts(); }
   };
 
-  /* ---------- 白名单编辑（高危 → 二次令牌） ---------- */
-  const [whitelistDraft, setWhitelistDraft] = useState('');
-  const [whitelistConfirm, setWhitelistConfirm] = useState('');
-  const saveWhitelist = async () => {
-    if (!whitelistConfirm.trim()) { toast('白名单增删属高危操作：请二次输入 WebUI 令牌', 'err'); return; }
-    const list = whitelistDraft.split(/[\s,，]+/).map((s) => s.trim()).filter(Boolean);
-    const r = await api('/api/web/settings', { method: 'POST', body: { whitelist: list }, confirmToken: whitelistConfirm.trim() });
-    if (r.ok) { toast('白名单已更新', 'ok'); setWhitelistConfirm(''); loadSettings(); }
-    else toast(r.data?.message ?? '更新失败', 'err');
-  };
-
-  /* ---------- 限频/通知/CDP ---------- */
-  const [rateDraft, setRateDraft] = useState(null);
-  const [notifyDraft, setNotifyDraft] = useState(null);
-  const [cdpDraft, setCdpDraft] = useState(null);
+  /* ---------- 通知 / 高级 ---------- */
   const saveMisc = async (patch) => {
-    const r = await api('/api/web/settings', { method: 'POST', body: patch });
+    const r = await postSettings(patch);
     if (r.ok) { toast('已保存', 'ok'); loadSettings(); }
     else toast(r.data?.message ?? '保存失败', 'err');
+  };
+
+  /* ---------- 日志（保留天数 + 手动清理） ---------- */
+  const [logDays, setLogDays] = useState(30);
+  const [purgeBusy, setPurgeBusy] = useState(false);
+
+  const saveLogDays = async () => {
+    const r = await postSettings({ log_retention_days: logDays });
+    if (r.ok) { toast('保留天数已保存（定时清理重启后生效）', 'ok'); loadSettings(); }
+    else toast(r.data?.message ?? '保存失败', 'err');
+  };
+
+  const doPurge = async () => {
+    if (!Number.isFinite(logDays)) return;
+    if (!window.confirm(`手动清理：立即删除 ${logDays} 天之前的全部代理/文件日志（两表）？不可恢复。`)) return;
+    setPurgeBusy(true);
+    const r = await purgeLogs(logDays);
+    setPurgeBusy(false);
+    if (r.ok) toast(`日志已手动清理（${logDays} 天之前，立即生效）`, 'ok');
+    else toast(r.data?.message ?? '清理失败', 'err');
+  };
+
+  // v1.2.2 微调：默认值 30 天导致「手动清理」对近期记录像没生效 —— 加显式「全清两表」
+  const doPurgeAll = async () => {
+    if (!window.confirm('全清两表（proxy_logs + file_hits 全部记录）？不可恢复。')) return;
+    setPurgeBusy(true);
+    const r = await purgeLogs(undefined); // days 省略 → 服务端 purgeAllLogs
+    setPurgeBusy(false);
+    if (r.ok) toast(`日志已全清（proxy_logs ${r.data.deleted?.proxy_logs ?? 0} / file_hits ${r.data.deleted?.file_hits ?? 0} 行）`, 'ok');
+    else toast(r.data?.message ?? '清理失败', 'err');
   };
 
   if (!accounts || !settings) return <p className="muted">加载中…</p>;
@@ -146,7 +168,7 @@ export default function Settings({ toast }) {
     <div>
       <h2 style={{ marginTop: 0 }}>系统配置</h2>
       <div className="row" style={{ marginBottom: 12 }}>
-        {[['accounts', '账号池'], ['whitelist', '白名单'], ['misc', '限频 / 通知 / CDP']].map(([id, label]) => (
+        {[['accounts', '账号池'], ['policy', '校验策略'], ['misc', '通知 / 高级'], ['logs', '日志']].map(([id, label]) => (
           <button key={id} className={`btn btn-sm ${tab === id ? 'btn-primary' : ''}`} onClick={() => setTab(id)}>{label}</button>
         ))}
       </div>
@@ -211,77 +233,74 @@ export default function Settings({ toast }) {
         </div>
       )}
 
-      {tab === 'whitelist' && (
+      {tab === 'policy' && (
         <div className="card">
-          <h3>域名白名单（高危：增删直接扩大 SSRF 面）</h3>
-          <p className="muted">默认继承 CF 版：uc.cn / quark.cn。一行一个或逗号/空格分隔，保存需二次令牌确认。</p>
-          <textarea
-            className="input"
-            rows={4}
-            defaultValue={settings.whitelist.join('\n')}
-            onChange={(e) => setWhitelistDraft(e.target.value)}
-            placeholder="uc.cn&#10;quark.cn"
-          />
-          <div className="row" style={{ marginTop: 10 }}>
-            <input className="input mono grow" type="password" placeholder="二次确认：输入 WebUI 令牌" value={whitelistConfirm} onChange={(e) => setWhitelistConfirm(e.target.value)} />
-            <button className="btn btn-primary" onClick={saveWhitelist}>保存白名单</button>
-          </div>
+          <h3>校验策略（proxy.js 单一实现，backend 只读展示）</h3>
+          <p className="muted" style={{ marginTop: 0 }}>
+            v1.2.2 起白名单 / 限频 / token 校验统一在 functions/api/proxy.js（本地 wrangler 与云端 CF 同一份代码），backend 不再重复维护。
+          </p>
+          <table className="tbl">
+            <tbody>
+              <tr><td style={{ width: 160 }}>白名单</td><td className="mono">{settings.policy?.whitelist ?? '-'}</td></tr>
+              <tr><td>限频</td><td className="mono">{settings.policy?.rateLimit ?? '-'}</td></tr>
+              <tr><td>归属</td><td className="mono">{settings.policy?.owner ?? '-'}</td></tr>
+            </tbody>
+          </table>
+          <p className="muted" style={{ marginBottom: 0 }}>调整白名单 / 限频请编辑 functions/api/proxy.js 后重启 wrangler。</p>
         </div>
       )}
 
       {tab === 'misc' && (
         <div>
           <div className="card">
-            <h3>限频（按 IP）</h3>
-            <div className="row">
-              <input
-                className="input"
-                style={{ width: 140 }}
-                type="number"
-                min="0"
-                max="600"
-                value={rateDraft ?? settings.rateLimitPerMin}
-                onChange={(e) => setRateDraft(Number(e.target.value))}
-              />
-              <span className="muted">次/分钟 · 0 = 关闭（默认关，防家庭组误伤；公网暴露建议开）</span>
-              <button className="btn btn-sm btn-primary" onClick={() => saveMisc({ rateLimitPerMin: rateDraft ?? 0 })}>保存</button>
-            </div>
-          </div>
-          <div className="card">
             <h3>通知渠道（monitor 插件用，v2）</h3>
             <p className="muted" style={{ marginTop: 0 }}>
               webhook / ntfy / Server酱 / pushplus / 自定义 URL + 浏览器系统通知（Notification API）。v2 与 monitor 插件一起开放。
             </p>
             <label className="row" style={{ fontSize: 13 }}>
-              <input type="checkbox" checked={Boolean(settings.notify.enabled)} onChange={(e) => saveMisc({ notify: { ...settings.notify, enabled: e.target.checked } })} />
-              启用通知（当前状态：{settings.notify.enabled ? '开' : '关'}）
+              <input type="checkbox" checked={Boolean(settings.notify?.enabled)} onChange={(e) => saveMisc({ notify: { ...(settings.notify ?? {}), enabled: e.target.checked } })} />
+              启用通知（当前状态：{settings.notify?.enabled ? '开' : '关'}）
             </label>
+            <p className="muted" style={{ marginBottom: 0 }}>已配置 {settings.notify?.webhooks?.length ?? 0} 个 webhook（webhook 明细需直接编辑 data/period/config.json）。</p>
           </div>
           <div className="card">
-            <h3>CDP 自动取 cookie（可选插件，默认关）</h3>
-            <div className="row">
-              <input
-                className="input mono grow"
-                placeholder="浏览器 remote_debugging 地址，如 http://127.0.0.1:9222"
-                defaultValue={settings.cdp.wsUrl}
-                onChange={(e) => setCdpDraft((prev) => ({ ...(prev ?? settings.cdp), wsUrl: e.target.value }))}
-              />
-              <label className="row" style={{ fontSize: 13 }}>
-                <input
-                  type="checkbox"
-                  checked={Boolean(settings.cdp.enabled)}
-                  onChange={(e) => {
-                    const next = { ...(cdpDraft ?? settings.cdp), enabled: e.target.checked };
-                    setCdpDraft(next);
-                    saveMisc({ cdp: next });
-                  }}
-                />
-                开启 CDP
-              </label>
-              <button className="btn btn-sm" onClick={() => saveMisc({ cdp: { ...(cdpDraft ?? settings.cdp), wsUrl: cdpDraft?.wsUrl ?? settings.cdp.wsUrl } })}>保存地址</button>
-            </div>
-            <p className="muted" style={{ marginBottom: 0 }}>需浏览器先手动授权（不是魔法）；v2 实现在 monitor 插件里。</p>
+            <h3>高级（严格终端穿透）</h3>
+            <label className="row" style={{ fontSize: 13 }}>
+              <input type="checkbox" checked={Boolean(settings.advanced?.terminalEnabled)} onChange={(e) => saveMisc({ advanced: { ...(settings.advanced ?? {}), terminalEnabled: e.target.checked } })} />
+              开启终端穿透（/api/web/terminal/ws，xterm.js 严格 Host + Origin + 令牌校验）
+            </label>
+            <p className="muted" style={{ marginBottom: 0 }}>默认关。开启后终端页可穿透到本机 shell（风险自担）。</p>
           </div>
+        </div>
+      )}
+
+      {tab === 'logs' && (
+        <div className="card">
+          <h3>日志</h3>
+          <p className="muted" style={{ marginTop: 0 }}>
+            proxy_logs + file_hits 两表。保留天数用于定时清理：<b>重启后生效</b>（backend 启动时执行一次 + 每小时定时）；
+            「手动清理」<b>立即生效</b>，不受重启影响（输入天数前的记录；输入 0 = 全清）。
+          </p>
+          <div className="row">
+            <input
+              className="input"
+              style={{ width: 140 }}
+              type="number"
+              min="0"
+              max="365"
+              value={logDays}
+              onChange={(e) => setLogDays(Number(e.target.value))}
+            />
+            <span className="muted">天</span>
+            <button className="btn btn-sm btn-primary" onClick={saveLogDays}>保存保留天数</button>
+            <button className="btn btn-sm btn-danger" onClick={doPurge} disabled={purgeBusy || !Number.isFinite(logDays)}>
+              {purgeBusy ? '清理中…' : '手动清理日志'}
+            </button>
+            <button className="btn btn-sm btn-danger" onClick={doPurgeAll} disabled={purgeBusy}>
+              {purgeBusy ? '清理中…' : '全清两表'}
+            </button>
+          </div>
+          <p className="muted" style={{ marginBottom: 0 }}>手动清理 = 立即删除输入天数之前的数据（输入 0 = 全清）；「全清两表」不读输入框，立即清空全部代理/文件日志。</p>
         </div>
       )}
     </div>

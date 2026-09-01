@@ -88,15 +88,43 @@ export class DirectTransport implements Transport {
   }
 }
 
+/** v1.2.2：最近一次代理响应回传的 x-panhub-account（代理托管账号 label；无则 null）。
+ * 只记 label 不记 cookie 明文 —— 供 CookieInputModal 展示「代理托管账号」，服务端不回传真实凭据。 */
+let lastProxyAccountLabel: string | null = null;
+
+/** v1.2.2（wip2 修正）：x-panhub-account-id —— 命中账号的数字 id（后端 cookie-pick / hop 回传；无则 null）。 */
+let lastProxyAccountId: number | null = null;
+
+/** v1.2.2（wip2 修正）：x-panhub-backend: ok —— functions 检测到 backend 可取号（代理托管生效；无则 false）。 */
+let lastProxyBackendOk = false;
+
+/** 取最近一次代理响应回传的代理托管账号 label（无则 null；仅 label，不含任何 cookie 明文） */
+export function getLastProxyAccountLabel(): string | null {
+  return lastProxyAccountLabel;
+}
+
+/** 取最近一次代理响应回传的命中账号数字 id（无则 null；审计/判重用，不含 cookie 明文） */
+export function getLastProxyAccountId(): number | null {
+  return lastProxyAccountId;
+}
+
+/** 最近一次代理响应是否带 x-panhub-backend: ok（functions 已从 backend 取到号；无则 false） */
+export function getLastProxyBackendOk(): boolean {
+  return lastProxyBackendOk;
+}
+
 /** 代理实现：POST {proxyUrl}/api/proxy 转发（协议见 docs/transport.md §协议） */
 export class ProxyTransport implements Transport {
   readonly id = 'proxy' as const;
   private readonly base: string;
   private readonly token: string;
+  /** v1.2.2：IP 采集（哈希化后上传）——开时请求带 x-panhub-trace: ip-hash 头，服务端 sha256(ip+salt) 后落库 */
+  private readonly ipHash: boolean;
 
-  constructor(base: string, token = '') {
+  constructor(base: string, token = '', ipHash = false) {
     this.base = base;
     this.token = token;
+    this.ipHash = ipHash;
   }
 
   available(): boolean {
@@ -111,12 +139,16 @@ export class ProxyTransport implements Transport {
         headers: {
           'Content-Type': 'application/json',
           ...(this.token ? { 'X-Proxy-Token': this.token } : {}),
+          // v1.2.2：IP 采集开关（默认关）；开时服务端按 consent 头哈希化 IP 落 trace，不落明文
+          ...(this.ipHash ? { 'x-panhub-trace': 'ip-hash' } : {}),
         },
         body: JSON.stringify({
           url: req.url,
           method: req.method ?? 'GET',
           headers: req.headers ?? {},
           body: req.body ?? null,
+          // v1.2.2：请求级 ID，供服务端 trace 两阶段关联（直连无服务端日志，DirectTransport 不加）
+          frontend_id: crypto.randomUUID(),
         }),
       });
     } catch (err) {
@@ -132,6 +164,25 @@ export class ProxyTransport implements Transport {
     res.headers.forEach((v, k) => {
       headers[k] = v;
     });
+    // v1.2.2：代理托管账号 label（云端 cookie-pick / 本地 hop 命中账号时回传；经 headers 透传通道到达）
+    // 服务端统一 encodeURIComponent（Node http 非 ASCII 头限制），这里解码回可读标签
+    if (headers['x-panhub-account']) {
+      try {
+        lastProxyAccountLabel = decodeURIComponent(headers['x-panhub-account']);
+      } catch {
+        lastProxyAccountLabel = headers['x-panhub-account'];
+      }
+    }
+    // v1.2.2（wip2 修正）：命中账号数字 id + backend 可用标记（functions cookie-pick 成功才回传；
+    // 缺失 = 未取到号/未配置 BACKEND_URL，保持旧值不覆盖，避免误报）
+    const accountIdRaw = headers['x-panhub-account-id'];
+    if (accountIdRaw !== undefined && accountIdRaw !== null && accountIdRaw !== '') {
+      const n = Number(accountIdRaw);
+      if (Number.isFinite(n)) lastProxyAccountId = n;
+    }
+    if (headers['x-panhub-backend'] === 'ok') {
+      lastProxyBackendOk = true;
+    }
     return {
       status: res.status,
       headers,
@@ -147,6 +198,10 @@ let active: Transport = new DirectTransport();
 /** 设置当前传输（设置面板切换时调用；null = 回退直连） */
 export function setActiveTransport(t: Transport | null): void {
   active = t ?? new DirectTransport();
+  // v1.2.2（wip2 修正）：切换传输时重置托管状态，避免旧代理的账号/可用性标记串到新传输
+  lastProxyAccountLabel = null;
+  lastProxyAccountId = null;
+  lastProxyBackendOk = false;
 }
 
 /** 取当前传输（adapter 内部用；缺省直连） */
@@ -155,9 +210,9 @@ export function getActiveTransport(): Transport {
 }
 
 /** 根据偏好创建传输（preferences.transport 配置 → 实例） */
-export function transportFromPrefs(prefs: { mode: 'direct' | 'proxy'; proxyUrl: string; proxyToken?: string }): Transport {
+export function transportFromPrefs(prefs: { mode: 'direct' | 'proxy'; proxyUrl: string; proxyToken?: string; ipHashUpload?: boolean }): Transport {
   if (prefs.mode === 'proxy' && prefs.proxyUrl.trim()) {
-    return new ProxyTransport(prefs.proxyUrl.trim().replace(/\/+$/, ''), prefs.proxyToken ?? '');
+    return new ProxyTransport(prefs.proxyUrl.trim().replace(/\/+$/, ''), prefs.proxyToken ?? '', prefs.ipHashUpload ?? false);
   }
   return new DirectTransport();
 }

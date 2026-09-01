@@ -1,15 +1,17 @@
 {
   "name": "panhub-backend",
-  "version": "0.1.0",
+  "version": "0.1.0-next",
   "private": true,
   "type": "module",
-  "description": "panhub_praser 自托管转发代理 + 管理面板（docs/selfhost-node.md v1.2.x）",
+  "description": "panhub_praser 指挥中心（增强 hop + 管理面板，docs/backend-wrangler-plan.md v1.2.1）",
   "scripts": {
     "dev": "node src/index.js",
     "build:webui": "vite build --config webui/vite.config.js",
     "typecheck:webui": "vite build --config webui/vite.config.js --mode typecheck"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "preact": "^10.29.8"
   },
   "devDependencies": {

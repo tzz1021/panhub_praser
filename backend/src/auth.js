@@ -24,13 +24,16 @@ function safeEqual(a, b) {
   return timingSafeEqual(ba, bb);
 }
 
-/** Host 头校验（DNS rebinding 防线 1） */
+/** Host 头校验（DNS rebinding 防线 1）
+ * 放行：回环（127.0.0.1/localhost/[::1]）+ 配置的 webui.host / proxy.host。
+ * B 端部署：PANHUB_BIND=<固定内网 IP> 时 launcher 会把 proxy.host/webui.host 写成该 IP →
+ * 企业员工经固定内网 IP 访问管理面板放行；0.0.0.0 永不匹配真实 Host，天然只放行回环。 */
 export function hostAllowed(hostHeader) {
   if (!hostHeader) return false;
   const host = hostHeader.split(':')[0].replace(/^\[|\]$/g, '').toLowerCase();
   if (ALLOWED_HOSTS.has(host)) return true;
   const cfg = getConfig();
-  return host === (cfg.webui.host || '127.0.0.1');
+  return host === (cfg.webui.host || '127.0.0.1') || host === (cfg.proxy.host || '127.0.0.1');
 }
 
 /** Origin 校验（防线 2）：同源或缺失放行 */

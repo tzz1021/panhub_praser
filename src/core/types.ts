@@ -116,6 +116,17 @@ export interface LinkFetchOptions {
 
 /* ============================== 偏好设置 ============================== */
 
+/** 夸克网盘专属偏好（v1.1.9.final：qk-guestTurn 游客模拟开关） */
+export interface QuarkPrefs {
+  /**
+   * 模拟游客访问夸克 <50MB 文件（默认关）：
+   * 开 = 小文件走游客态（随机/捕获 __pugs，不注入登录态整串），快但依赖 pugs 捕获链路；
+   * 关 = 所有文件一律按登录态处理（直接弹 CookieInputModal，最稳妥）。
+   * 副标题：配置本地管理面板后不生效（后端账号池会接管游客流转）。
+   */
+  qkGuestTurn: boolean;
+}
+
 /** 弹窗开关（HANDOFF 附件 UAC 表底部全局行） */
 export interface ModalPrefs {
   /** 读取 cookie 警告弹窗（§10：下载层需 __pugs 游客态 cookie，解析时弹窗预热；默认开，可关） */
@@ -178,6 +189,8 @@ export interface TransportPrefs {
   proxyUrl: string;
   /** 代理访问令牌（部署时配置的 PROXY_TOKEN；代理未设 token 时可留空） */
   proxyToken: string;
+  /** v1.2.2：IP 采集（哈希化后上传），默认关；开时 ProxyTransport 请求带 x-panhub-trace: ip-hash 头 */
+  ipHashUpload: boolean;
 }
 
 /** 高级功能偏好（v1.1.7：设置面板「高级功能」折叠区，总开关默认关） */
@@ -239,6 +252,8 @@ export interface Preferences {
   transport: TransportPrefs;
   /** 高级功能（v1.1.7：设置面板折叠区，总开关默认关） */
   advanced: AdvancedPrefs;
+  /** 夸克网盘专属偏好（v1.1.9.final：qk-guestTurn 游客模拟开关） */
+  quark: QuarkPrefs;
   /**
    * 资源复用窗口（小时，v1.1.4）：0 = 不复用。
    * - ls 复用：窗口内从历史/足迹再进同一分享，直接复用缓存目录树 + stoken，不重新拉取；
@@ -399,6 +414,16 @@ export interface TaskOptions {
   keepStructure: boolean;
   /** 下载目录（绝对路径，用于 aria2/curl 的 -d/输出路径） */
   outDir?: string;
+  /**
+   * v1.1.9.final：aria2 导出额外参数（设置 → 高级功能）—— 原样拼进每条命令
+   * --out 之后、URL 之前（用户自担参数合法性；如 --max-connection-per-server=16）。
+   */
+  aria2Extra?: string;
+  /**
+   * v1.1.9.final：gopeed 导出额外参数 —— JSON 对象合并进每个任务的 opts
+   * （如 {"connections":16}；非合法 JSON 对象忽略）。
+   */
+  gopeedExtra?: string;
 }
 
 /* ============================== 树遍历入参 ============================== */
@@ -423,6 +448,11 @@ export interface LinkFetchContext {
   shareId: string;
   /** 分享访问令牌 */
   stoken: Stoken;
+  /**
+   * v1.1.9.final：游客模式（qk-guestTurn 开 + 全部 <50MB）——
+   * 适配器不注入登录态 cookie，改用游客 __pugs（夸克专用；UC 忽略）。
+   */
+  guestMode?: boolean;
 }
 
 /* ============================== UI 会话 ============================== */

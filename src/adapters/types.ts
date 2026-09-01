@@ -78,6 +78,11 @@ export interface DownloadParams {
   fids: string[];
   /** 与 fids 一一对应的分享文件令牌 */
   fidsTokens: string[];
+  /**
+   * v1.1.9.final：游客模式（qk-guestTurn）—— 适配器不注入登录态整串，
+   * 改用游客 __pugs 发起请求（夸克 <50MB 小文件；其他网盘忽略）。
+   */
+  guestMode?: boolean;
 }
 
 /** 单文件直链结果 */

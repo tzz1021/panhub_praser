@@ -24,6 +24,7 @@ import { ExportYellowModal } from '../components/ExportYellowModal';
 import { RestoreCollapsedModal } from '../components/RestoreCollapsedModal';
 import { useToast } from '../components/Toast';
 import { fetchLinks } from '../core/linkFetcher';
+import { getLastProxyAccountLabel, getLastProxyBackendOk } from '../core/transport/types';
 import { fetchListSnapshot, renderTreeText, hhmmss } from '../core/listFetcher';
 import { getPreferences } from '../core/preferences';
 import { addRecord } from '../core/footprint/records';
@@ -168,6 +169,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   const [cookieInputWarn, setCookieInputWarn] = useState(false);
   const cookieRetryFiles = useRef<ShareFile[]>([]);
   const pendingFetch = useRef<ShareFile[] | null>(null);
+  // v1.2.2（wip2 修正）：代理托管 toast 一次性标志（已提示过就不再刷屏）
+  const backendOkToastShown = useRef(false);
   const [, setTick] = useState(0); // 倒计时刷新
 
   // 倒计时：链接存在时每 30s 刷新
@@ -337,17 +340,26 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     // v1.1.9.2 fix1：智能分流 —— 选中含大文件（≥ adapter.cookieInput.sizeThreshold，
     // 夸克约 50MB 实测必 23018）时直接弹登录态填写窗，跳过 cookieWarn（游客态 __pugs
     // 对 23018 无意义）；填完保存即带登录态 cookie 请求，避免一次必然失败的 400 污染代理日志看板。
+    // v1.1.9.final：前置条件 qk-guestTurn —— 开关关（默认）= 所有文件一律按登录态处理（最稳妥）；
+    // 开关开 = 正常 size 判断，全部 <50MB 时走游客态（不弹窗、不注入登录态整串，随机 __pugs）。
     const loginThreshold = adapter.cookieInput?.sizeThreshold;
-    if (loginThreshold && prefs.modals.cookieInput) {
-      const bigFiles = files.filter((f) => !f.dir && (f.size ?? 0) >= loginThreshold);
+    const guestTurn = prefs.quark?.qkGuestTurn === true;
+    if (adapter.cookieInput && prefs.modals.cookieInput && loginThreshold) {
+      const bigFiles = guestTurn ? files.filter((f) => !f.dir && (f.size ?? 0) >= loginThreshold) : files;
       if (bigFiles.length > 0) {
         addGlobalLog(
-          `prase：检测到 ${bigFiles.length}/${files.length} 个大文件（≥${Math.round(loginThreshold / 1024 / 1024)}MB，需登录态）—— 直接弹出登录态 cookie 填写窗`,
+          guestTurn
+            ? `prase：检测到 ${bigFiles.length}/${files.length} 个大文件（≥${Math.round(loginThreshold / 1024 / 1024)}MB，需登录态）—— 直接弹出登录态 cookie 填写窗`
+            : `prase：qk-guestTurn 关（默认）—— 全部文件按登录态处理，直接弹出登录态 cookie 填写窗`,
         );
         cookieRetryFiles.current = files;
         setCookieInputWarn(true);
         return;
       }
+      // guestTurn 开 + 全部 <50MB：走游客态（scanner 侧不注入登录态整串）
+      addGlobalLog('prase：qk-guestTurn 开 + 全部 <50MB —— 模拟游客（随机/捕获 __pugs），不注入登录态 cookie');
+      void doFetchLinks(files, true);
+      return;
     }
     if (adapter.cookie && prefs.modals.cookieWarn) {
       addGlobalLog(`prase：需要 ${adapter.cookie.displayName} —— 弹窗已出现，等待用户选择（当前捕获 ${getPugs() ? '有值' : '为空'}，解析后代理捕获自动更新）`);
@@ -366,8 +378,9 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     return isLinkUsable(links?.get(fid), prefs.reuseWindowHours, f?.size);
   };
 
-  /** 真正执行 prase（每个下载响应下发的 __pugs 与该响应的直链绑定，§12） */
-  const doFetchLinks = async (files: ShareFile[]): Promise<void> => {
+  /** 真正执行 prase（每个下载响应下发的 __pugs 与该响应的直链绑定，§12）
+   * @param guestMode v1.1.9.final：qk-guestTurn 游客模式（不注入登录态整串） */
+  const doFetchLinks = async (files: ShareFile[], guestMode = false): Promise<void> => {
     setFetching(true);
     setFetchProgress({ done: 0, total: files.length });
     try {
@@ -389,7 +402,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
       if (toFetch.length > 0) {
         addGlobalLog(`prase：发起接口请求 ${toFetch.length} 个（15/批 + 1s 节流）`);
         results = await fetchLinks(
-          { adapter, shareId, stoken },
+          { adapter, shareId, stoken, guestMode },
           toFetch,
           { batchSize: 15, batchIntervalMs: 1000, continueOnError: true },
         );
@@ -494,6 +507,16 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             ? `解析完成：${okCount} 个文件全部成功`
             : `部分失败：${okCount}/${files.length} 成功，可重试失败项`,
           okCount === files.length ? 'success' : 'error',
+        );
+      }
+      // v1.2.2（wip2 修正）：functions 检测到 backend 可取号（x-panhub-backend: ok）→
+      // 提示「代理托管账号」已生效，避免用户在弹窗里白填 cookie（proxy 模式下 localStorage 不参与注入）
+      if (!backendOkToastShown.current && getLastProxyBackendOk()) {
+        backendOkToastShown.current = true;
+        const label = getLastProxyAccountLabel();
+        toast(
+          label ? `已使用代理托管账号 ${label}（cookie 由后端管理，无需手动填写）` : '已使用代理托管账号（cookie 由后端管理，无需手动填写）',
+          'info',
         );
       }
     } catch (err) {
@@ -741,6 +764,9 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     const { fileName, content } = exportTask(kind, files, {
       keepStructure,
       outDir: downloader.savePath || undefined,
+      // v1.1.9.final：高级设置 → 导出额外参数（此前是假把戏，现在真正拼进任务）
+      aria2Extra: prefs.advanced.aria2Extra || undefined,
+      gopeedExtra: prefs.advanced.gopeedExtra || undefined,
     });
     downloadFile(fileName, content);
     addGlobalLog(`task：合并完成，已生成 ${fileName}（下载命令已就绪）`);
@@ -1091,8 +1117,16 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             addGlobalLog(`prase：登录态 cookie 已保存（${filled ? '有值' : '清空'}），重试 ${retry.length} 个失败文件`);
             if (filled && retry.length > 0) {
               void doFetchLinks(retry);
-            } else {
-              toast('已保存（未填写任何值，失败文件可手动重试）', filled ? 'success' : 'info');
+            } else if (retry.length > 0) {
+              // v1.2.2 拍板之四：未填 cookie → 按随机游客尝试（大概率直接失败，可试探网盘是否支持游客）。
+              // v1.2.2 fix（09-01 wip3 排查）：空值也要真正发请求 —— 之前只 toast 不重试，
+              // 代理托管模式（BACKEND_URL 取号）下 backend 会自动注入账号，重试即成功；
+              // 无代理时则是名副其实的随机游客试探。
+              toast(
+                '未检测到 selfhost 也未手动填写 cookie：已按随机游客尝试（大概率直接失败，可用于试探网盘是否支持游客）',
+                filled ? 'success' : 'info',
+              );
+              void doFetchLinks(retry);
             }
           }}
         />

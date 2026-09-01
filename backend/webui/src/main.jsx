@@ -17,7 +17,7 @@ import Settings from './pages/Settings.jsx';
 const NAV = [
   { id: 'dashboard', label: '基础信息', icon: '🏠' },
   { id: 'network', label: '网络配置', icon: '🌐' },
-  { id: 'logs', label: '实时日志', icon: '📋' },
+  { id: 'logs', label: '操作日志', icon: '📋' },
   { id: 'stats', label: '数据看板', icon: '📊' },
   { id: 'plugins', label: '插件管理', icon: '🧩' },
   { id: 'terminal', label: '系统终端', icon: '💻' },
@@ -56,7 +56,7 @@ function Login({ onOk }) {
     <div className="login-wrap">
       <div className="login-card">
         <h1>panhub 管理面板</h1>
-        <div className="sub">自托管转发代理 · 仅本机可访问（127.0.0.1）</div>
+        <div className="sub">自托管转发代理 · WebUI 限本机 / 固定内网 IP</div>
         <input
           className="input mono"
           type="password"
@@ -128,7 +128,7 @@ function App() {
           ))}
         </nav>
         <div className="side-foot">
-          backend v0.1.0<br />WebUI 仅本机 · 随机端口
+          backend v0.1.0<br />WebUI 限本机/内网 · 随机端口
         </div>
       </aside>
       <main className="content">

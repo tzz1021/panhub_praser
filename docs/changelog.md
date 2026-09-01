@@ -3,6 +3,14 @@
 > 面向开发者（repo:/dev/ 入口）。面向用户的说明见 README.md。
 > 约定：`## [版本] 日期` + 三块（新增 / 修复 / 变更）。
 
+## [v1.2.next2]2026-09-01——完美适配quark，多次功能更新和后端设计重构<已强制推送覆盖不安全的版本>
+ 
+### 人工书写，不再举例
+
+后端设计很乱，定稿查看docs/backend-wrangler-plan.md。不再展示试错过程
+如果不足以满足B端需求还可以继续改进，期待你的指点
+
+
 ## [v1.1.9.final] 2026-08-26 —— 夸克风控：UA 定制 + 智能分流（Tzz 真机 + wrangler devtools 验证）
 ### 新增
 - **quark download 定制 UA（QUARK_DL_UA，与 linkswift 同款）**：
@@ -11,6 +19,19 @@
   - 实现：scanner getDownloadLinks 请求头加 `User-Agent: quark-cloud-drive/3.20.0 ... Electron/24.1.3.8`；
     浏览器禁改 UA，该头经代理 JSON body 透传、proxy.js 白名单放行后在服务端注入
   - 范围：仅 download 用（token/detail 游客态无需，与 linkswift 一致）
+- **qk-guestTurn 游客模拟开关（<50MB bug 修复，Tzz 定方案）**：
+  - 背景：用户填过登录态整串后，小文件请求也带上完整登录 cookie → 夸克返回登录态 CDN 直链
+    但导出只配 __pugs → 凭据不匹配、文件流掐断（curl/aria2/gopeed 全部无 cookie）
+  - 开关（设置 → 夸克网盘特设，默认关）：开 = 小文件走游客态（请求不注入登录态整串，
+    改用捕获/随机 __pugs；无则裸请求等响应下发）→ 游客 CDN 直链 + __pugs 匹配；
+    关 = 所有文件一律按登录态处理（直接弹 CookieInputModal，最稳妥）
+  - 实现：DownloadParams/LinkFetchContext 加 guestMode 透传 → quark scanner 游客分支；
+    分流前置条件：guestTurn 开才做 size 判断，关 = 恒按大文件
+  - 副标题：配置本地管理面板后不生效（后端账号池将接管游客流转）
+- **aria2/gopeed 导出额外参数真正接入（修复假把戏）**：
+  - 此前 advanced.aria2Extra/gopeedExtra 只有 UI 无消费方，任何网盘都不生效
+  - aria2Extra：原样拼进每条命令 --out 之后、URL 之前；gopeedExtra：JSON 对象合并进每个任务 opts
+    （如 {"connections":16}，非 JSON 忽略；UI 说明同步改为 opts）
 - **导出凭据按文件大小分流（Tzz 真机 200 后确认）**：
   - 大文件（≥50MB，登录态）：oss 校验令牌**只有 __puus** —— 从整串提取单个值回传，
     绝不返回完整登录 cookie（导出文件可能被分享/上传，整串泄露即账号被盗；__pus 长期凭证更不可出）
@@ -39,6 +60,10 @@
   Tzz 真机验证：真实 cookie + 代理 → download **200** ✅（2026-08-26 21:19）
 - 单测 14/14 ✅（md5 注释行 ×5 + cookie 分流 ×9：小文件 __pugs / 大文件只 __puus / 无 __puus 不返回 /
   无 pugs 仍只 __puus / 绝不包含 __pus 与完整串）；typecheck ✅ build ✅
+- **qk-guestTurn 验证（2026-08-27）**：单测 13/13 ✅（guestMode 不带登录整串/带 pugs/导出 __pugs +
+  aria2 拼参/gopeed 合并 opts）；E2E 三场景 ✅（开+小文件=游客请求无整串 / 关+小文件=弹窗 /
+  开+大文件=弹窗）；E2E 导出 ✅（curl 含真实 __pugs= + # hash: + 无 __pus，游客 CDN dl-guest-zb-u 匹配）
+- 隐秘参数 modal 已核查：HiddenVolumnModal 与 uc/quark 两 registry 均泛化（各自 body），未见 UC 话术串场
 - 待 Tzz 审 diff → 推送 + tag v1.1.9.final（按协作协议先 diff 确认再推）
 
 ## [v1.2.0-wip] 2026-08-25 —— backend 骨架 + 管理面板（v0.1.0）+ 夸克登录态弹窗修复

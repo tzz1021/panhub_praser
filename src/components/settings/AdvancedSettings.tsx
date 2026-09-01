@@ -43,7 +43,7 @@ export function AdvancedSettings({ advanced, onChange }: AdvancedSettingsProps):
       <div className="switch-row" style={{ opacity: disabled ? 0.45 : 1 }}>
         <div style={{ flex: 1 }}>
           <div className="switch-label">gopeed 导出额外参数</div>
-          <div className="switch-sub">默认留空；JSON 对象合并进每个任务的 store（非 JSON 忽略）</div>
+          <div className="switch-sub">默认留空；JSON 对象合并进每个任务的 opts（非 JSON 忽略）</div>
           <input
             className="input"
             style={{ width: '100%', marginTop: 6, padding: '6px 10px', boxSizing: 'border-box' }}

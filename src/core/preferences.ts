@@ -55,6 +55,7 @@ export const DEFAULTS: Preferences = {
     mode: 'direct', // 解析通道：direct 直连（CORS 受限）| proxy 代理转发（1.1 新增）
     proxyUrl: '', // 用户填写的 API 转发代理地址（最好是自己的）
     proxyToken: '', // 代理访问令牌（部署时配置的 PROXY_TOKEN；代理未设 token 时可留空）
+    ipHashUpload: false, // v1.2.2：IP 采集（哈希化后上传）默认关
   },
   advanced: {
     enabled: false, // v1.1.7：高级功能总开关（默认关）
@@ -62,6 +63,10 @@ export const DEFAULTS: Preferences = {
     gopeedExtra: '',
     showHiddenVolumn: true,
     hiddenVolumnHint: true,
+  },
+  // v1.1.9.final：夸克专属偏好（qk-guestTurn 游客模拟，默认关 = 最稳妥）
+  quark: {
+    qkGuestTurn: false,
   },
   /** v1.1.4：资源复用窗口（小时）；0 = 不复用 */
   reuseWindowHours: 1,
@@ -85,6 +90,7 @@ function cloneDefaults(): Preferences {
     transport: { ...DEFAULTS.transport },
     footprint: { ...DEFAULTS.footprint },
     advanced: { ...DEFAULTS.advanced },
+    quark: { ...DEFAULTS.quark },
   };
 }
 
@@ -126,6 +132,7 @@ function mergePrefs(base: Preferences, patch: Partial<Preferences>): Preferences
   merged.transport = mergeGroup(base.transport, patch.transport);
   merged.footprint = mergeGroup(base.footprint, patch.footprint);
   merged.advanced = mergeGroup(base.advanced, patch.advanced);
+  merged.quark = mergeGroup(base.quark, patch.quark);
   return merged;
 }
 

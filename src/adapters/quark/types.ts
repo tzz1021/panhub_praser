@@ -48,7 +48,7 @@ export const ERROR_MESSAGES: Record<number, string> = {
  */
 export const QUARK_LIMITS = {
   needsTransfer: false,
-  needsLogin: false,
+  needsLogin: true,
   canRemoveSpeedLimit: true,
   needsCookie: true, // 下载层需要 __pugs（游客态，同 UC）
   noLoginNeeded: true,
@@ -56,7 +56,7 @@ export const QUARK_LIMITS = {
   loginThresholdNote: '约 50MB 以上需要登录（实测 41MB 可、51MB 23018）',
   sizeLimitNote: '游客约 50MB，登录后可大文件（linkswift 称 200MB+ 强登，未实测）',
   linkExpiryNote: '直链 6h（auth_key）/Cookie 3h',
-  etagNote: '暂不支持（查询需登录+解密脚本）；下载响应免费带 md5',
+  etagNote: 'md5 为文件标识 tag,download 响应自带非计算摘要',
 } as const;
 
 /** detail 接口 list[] 原始元素（字段来自真实抓包，只列适配器用到的） */
