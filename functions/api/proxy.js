@@ -56,7 +56,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'content-type, x-proxy-token, x-panhub-trace',
   // 跨域部署（如 SPA 在 GitHub Pages、代理在 pages.dev）时，浏览器需要显式放行才能读到 x-pugs 等回传头；
   // v1.2.2：+ x-panhub-account（代理托管账号 label，SPA 展示用）
-  'Access-Control-Expose-Headers': 'x-pugs, x-quark-pus, x-quark-puus, x-panhub-account',
+  'Access-Control-Expose-Headers': 'x-pugs, x-quark-pus, x-quark-puus, x-panhub-account, x-panhub-backend',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -426,11 +426,15 @@ export async function onRequestPost(context) {
   // 失败/超时/后端不可用 → 照旧用 SPA 自带 cookie（= 现状行为）。
   let accountTag = null;
   let accountId = null;
+  let pickedCookie = null;
+  let pickedReal = false; // v1.2.2 fix（09-03）：取到正式账号（kind=real）才回传 x-panhub-backend: ok
   if (env.BACKEND_URL && pan && operation === 'prase') {
     const pick = await pickAccountFromBackend(env, pan, operation);
     if (pick && typeof pick.cookie === 'string' && pick.cookie) {
       accountTag = typeof pick.tag === 'string' && pick.tag ? pick.tag : null;
       accountId = typeof pick.account_id === 'number' ? pick.account_id : null;
+      pickedReal = pick.kind === 'real';
+      pickedCookie = pick.cookie;
       const merged = {};
       for (const [k, v] of Object.entries(payload.headers ?? {})) merged[k.toLowerCase()] = v;
       merged.cookie = merged.cookie ? `${merged.cookie}; ${pick.cookie}` : pick.cookie;
@@ -501,10 +505,22 @@ export async function onRequestPost(context) {
     const m = (upstream.headers.get('set-cookie') ?? '').match(new RegExp(`(?:^|,)\\s*${name}=([^;,\\s]*)`));
     if (m) respHeaders[`x-quark-${name.replace(/^__/, '')}`] = m[1];
   }
+  // v1.2.2 fix（09-02）：取号兜底回传 __puus —— 夸克仅在 __puus 过期/缺失时才 Set-Cookie 刷新
+  // （账号池会话仍有效时上游不下发 x-quark-puus，SPA 就拿不到大文件 OSS 导出凭据）；
+  // 回传本次实际下发给上游的 cookie 里的 __puus（同一授权会话，CDN 认这个值）。
+  if (pan === 'quark' && !respHeaders['x-quark-puus'] && pickedCookie) {
+    const puusMatch = pickedCookie.match(/(?:^|;\s*)__puus=([^;]*)/);
+    if (puusMatch && puusMatch[1]) respHeaders['x-quark-puus'] = puusMatch[1];
+  }
   // v1.2.2：命中代理托管账号 → 回传标签（SPA 展示「代理托管账号」，不暴露 cookie 明文）
   // 与本地 hop 同一约定：encodeURIComponent（兼容 Node http 非 ASCII 头限制）
   if (accountTag) {
     respHeaders['x-panhub-account'] = encodeURIComponent(accountTag);
+  }
+  // v1.2.2 fix（09-03）：代理托管可用标记 —— 仅正式账号（取号 kind=real，非 guest 占位）时回传 ok；
+  // 此前该头从未被任何服务端下发 → SPA 的 09-02 toast 守卫（getLastProxyBackendOk）永不生效。
+  if (pickedReal) {
+    respHeaders['x-panhub-backend'] = 'ok';
   }
   return new Response(bodyText, { status: upstream.status, headers: respHeaders });
 }

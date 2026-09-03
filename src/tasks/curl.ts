@@ -61,7 +61,7 @@ export function generateCurlCommand(file: ExportFile, options?: Pick<TaskOptions
     : file.cookie
       ? ` -b "${file.cookie.key}=${file.cookie.value}"`
       : '';
-  const hint = file.cookie || file.cookieString ? '' : '\n# 提示：未捕获下载凭据（UC __pugs），该文件下载可能被拒（403/掐流）。请经代理解析后重新导出。';
+  const hint = file.cookie || file.cookieString ? '' : `\n# 提示：未捕获下载凭据（${file.credLabel ?? 'UC __pugs'}），该文件下载可能被拒（403/掐流）。请经代理解析后重新导出。`;
   // v1.1.9.final：hash 注释行（夸克 = dl 响应 md5；其他网盘可能 sha1）—— 下载后自行校验完整性
   const hashLine = file.hash ? `\n# hash: ${file.hash}` : '';
   return `curl -L -C -${createDirs} -o "${outPath}" -A "${UC_DOWNLOAD_UA}" -e "${UC_DOWNLOAD_REFERER}"${cookiePart} "${file.url}"${hashLine}${hint}`;

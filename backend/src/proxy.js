@@ -245,8 +245,19 @@ export async function handleProxy(reqBody, clientIp, proxyToken, traceHeader = '
 
   // ⑥ 响应头组装：透传 wrangler 的 CORS/凭据回传头 + 命中账号标识
   const respHeaders = { ...upstream.headers };
+  // v1.2.2 fix（09-02）：取号兜底回传 __puus —— 账号池 __puus 仍有效时夸克不刷新
+  // （上游无 x-quark-puus，SPA 拿不到大文件 OSS 导出凭据，六种导出方式全缺 __puus）；
+  // 回传本次实际下发到上游的 cookie 里的 __puus（同一授权会话，CDN 认这个值）。
+  if (pan === 'quark' && operation === 'prase' && hit && !respHeaders['x-quark-puus']) {
+    const m = hit.cookieString.match(/(?:^|;\s*)__puus=([^;]*)/);
+    if (m && m[1]) respHeaders['x-quark-puus'] = m[1];
+  }
   // v1.2.2 集成修复：中文账号标签必须 encodeURIComponent —— Node http 会丢弃/乱码非 ASCII 响应头
   if (hit?.tag) respHeaders['x-panhub-account'] = encodeURIComponent(hit.tag);
+  // v1.2.2 fix（09-03）：代理托管可用标记 —— 命中**正式账号**才回传 x-panhub-backend: ok；
+  // 前端据此区分「代理托管已就绪（无需手动 cookie）」vs「随机游客尝试」（guest 占位不发，话术才准确）。
+  // 此前该头全链路无人下发 → 前端 09-02 守卫永不生效：取号成功也误报「未检测到 selfhost」。
+  if (hit?.account?.kind === 'real') respHeaders['x-panhub-backend'] = 'ok';
 
   // ⑦ 阶段二写入（trace v2 §3）：UPDATE 请求行 + 批量 file_hits + debug 文件（完整 body）
   try {

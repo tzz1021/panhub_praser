@@ -391,6 +391,11 @@ export interface ExportFile {
   cookieString?: string;
   /** 文件校验 hash（网盘而异：夸克 = md5；导出时附注释行，用于校验下载完整性） */
   hash?: string;
+  /**
+   * v1.2.2 fix（09-02）：缺凭据提示标签（网盘名 + 应绑定的凭据 key，如夸克大文件 = "quark __puus"）。
+   * 调用方按适配器/文件大小标注；任务生成器只在无 cookie 时把提示注释写进导出命令（此前硬编码 UC __pugs，夸克误报）。
+   */
+  credLabel?: string;
   /** 网盘文件 ID（v1.1.5.2：导出后按 fid 查状态做黄色提醒；任务生成器忽略） */
   fid?: string;
 }

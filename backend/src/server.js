@@ -47,7 +47,7 @@ const PROXY_CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'POST, OPTIONS',
   'access-control-allow-headers': 'content-type, x-proxy-token',
-  'access-control-expose-headers': 'x-pugs, x-quark-pus, x-quark-puus, x-panhub-account',
+  'access-control-expose-headers': 'x-pugs, x-quark-pus, x-quark-puus, x-panhub-account, x-panhub-backend',
   'access-control-max-age': '86400',
 };
 
@@ -135,7 +135,8 @@ async function handleProxyRoute(req, res, clientIp) {
 /* ================= /api/proxy/cookie-pick 云端取号（v1.2.2 §4，X-Proxy-Token 鉴权） ================= */
 
 /**
- * 云端 proxy.js（CF）专用取号端点：body { pan, operation } → { cookie, account_id, tag }。
+ * 云端 proxy.js（CF）专用取号端点：body { pan, operation } → { cookie, account_id, tag, kind }。
+ * kind = 'real'（正式账号）| 'guest'（游客占位）—— 云端据此决定是否回传 x-panhub-backend: ok；
  * 复用 pickAccountForPan（prase 注入正式账号；无正式账号走 guest 生成随机 __pugs，label guest#xxx）；
  * 本机 hop 与云端取号共用同一套账号策略（§1.3 硬约束 3）。
  * 返回明文 cookie 给云端进程内存使用（云端永不落库）；回传 x-panhub-account 由云端负责。
@@ -185,7 +186,7 @@ async function handleCookiePick(req, res) {
       return;
     }
     audit('proxy.cookie-pick', `${pan}/${operation} → ${hit.tag}`, 'hop');
-    json(res, 200, { cookie: hit.cookieString, account_id: hit.account.id, tag: hit.tag }, PROXY_CORS);
+    json(res, 200, { cookie: hit.cookieString, account_id: hit.account.id, tag: hit.tag, kind: hit.account.kind }, PROXY_CORS);
   } catch (err) {
     json(res, 500, { error: 'INTERNAL', message: err.message }, PROXY_CORS);
   }

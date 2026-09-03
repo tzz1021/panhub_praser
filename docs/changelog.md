@@ -3,6 +3,43 @@
 > 面向开发者（repo:/dev/ 入口）。面向用户的说明见 README.md。
 > 约定：`## [版本] 日期` + 三块（新增 / 修复 / 变更）。
 
+## 2026-09-03 —— 夸克凭据链路收口（fix only）
+
+### 修复
+- **夸克 <50MB 登录态直链漏绑 __puus（09-02 版修漏）**：凭据绑定从「按文件 size 分流」改为「响应驱动、
+  与 size 无关」——托管/取号模式对所有 size 的 prase 一律注入正式账号 → 返回的都是 dl-pc-* 登录态直链，
+  只认 __puus；此前 isBig 分支（<50MB 不读 x-quark-puus）导致上游明明回传了 __puus 也被丢弃
+  （09-03 真机 41.65MB 文件复现：六种导出/推送全缺 OSS 鉴权）。scanner.ts 绑定顺序：
+  __puus（本地整串 ?? 同响应回传）→ __pugs（游客响应）→ 无凭据不注入（导出软提示）
+- **x-panhub-backend 头补发（09-02 该修复实际未完成）**：此前全链路没有任何服务端下发该头，
+  前端守卫 getLastProxyBackendOk() 永不生效 → 取号成功仍误报「未检测到 selfhost…已按随机游客尝试」。
+  现在 hop（backend/src/proxy.js）与云端取号（functions/api/proxy.js）命中**正式账号**
+  （kind=real；guest 占位不发，话术才准确）才回传 x-panhub-backend: ok；cookie-pick 响应补 kind 字段；
+  两端 expose 列表放行新头
+- **「随机游客」预判 toast 时序修正**：弹窗取消后的预判式 toast 只在**直连**（不存在 selfhost）时弹出；
+  代理模式改由请求结果说话（成功 → doFetchLinks 末尾「已使用代理托管账号」toast；失败 → 行内红 + 重试入口）。
+  此前读「上一次响应」的头做预判：首次 prase 前不存在上一次响应，头再准也救不了
+
+### 变更
+- **冻结声明（不再维护，不做清理）**：书签注入/同源直连（F-书签）、CORS 兑底自动跳转（corsAutoJump）、
+  qk-guestTurn（代理托管模式下本就不生效，直连场景保留）——行为以现状为准，不再投入修复
+
+## 2026-09-02 —— 夸克取号/导出凭据小修
+
+### 修复
+- **CookieInputModal 空保存仍误报「随机游客」**：取号/托管生效（x-panhub-backend: ok）时不再 toast
+  「未检测到 selfhost 也未手动填写 cookie：已按随机游客尝试」——该话术只在无 selfhost 兜底时准确；
+  托管模式交给 doFetchLinks 末尾的「已使用代理托管账号」提示（backendOkToastShown 去重）
+- **夸克大文件导出/推送六种方式全缺 __puus（OSS 鉴权）**：
+  - 根因：代理托管路径前端登录整串不参与（loginCookie=''）→ 大文件凭据来源断链，
+    即使服务端刷新会话、回传了 x-quark-puus 也没人接
+  - quark scanner：捕获 x-quark-puus（与 lastResponsePugs 同生命周期：每次调用重置、按响应绑定），
+    大文件 __puus 取 `本地整串 ?? 响应回传`
+  - backend hop（src/proxy.js）+ CF proxy.js：取号注入后若上游未刷新 __puus，兜底回传本次实际
+    下发的 __puus（x-quark-puus）——账号池会话仍有效（3h 内）时前端也能拿到导出凭据
+- **curl 导出缺凭据注释话术精准化**：不再硬编码 UC __pugs —— ExportFile 新增 credLabel，
+  按适配器/文件大小标注（夸克大文件 `quark __puus`、小文件 `quark __pugs`、UC 保持 `UC __pugs`）
+  
 ## [v1.2.next2]2026-09-01——完美适配quark，多次功能更新和后端设计重构<已强制推送覆盖不安全的版本>
  
 ### 人工书写，不再举例

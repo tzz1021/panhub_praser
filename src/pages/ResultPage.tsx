@@ -24,7 +24,7 @@ import { ExportYellowModal } from '../components/ExportYellowModal';
 import { RestoreCollapsedModal } from '../components/RestoreCollapsedModal';
 import { useToast } from '../components/Toast';
 import { fetchLinks } from '../core/linkFetcher';
-import { getLastProxyAccountLabel, getLastProxyBackendOk } from '../core/transport/types';
+import { getActiveTransport, getLastProxyAccountLabel, getLastProxyBackendOk } from '../core/transport/types';
 import { fetchListSnapshot, renderTreeText, hhmmss } from '../core/listFetcher';
 import { getPreferences } from '../core/preferences';
 import { addRecord } from '../core/footprint/records';
@@ -34,6 +34,7 @@ import { saveTree } from '../core/footprint/trees';
 import { savePraseEntries, listPraseByShareId, clearPraseByShareId } from '../core/footprint/prase';
 import { getPugs } from '../adapters/uc/cookies';
 import { getQuarkCookieString, setQuarkCookieString, getQuarkPugs } from '../adapters/quark/cookies';
+import { QUARK_LOGIN_SIZE } from '../adapters/quark/types';
 import { CookieInputModal } from '../components/CookieInputModal';
 import { exportTask, exportTreeMd } from '../tasks/export';
 import { DOWNLOADER_PRESETS, loadDownloaderConfig, pushFilesToDownloader } from '../utils/downloader';
@@ -509,8 +510,9 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           okCount === files.length ? 'success' : 'error',
         );
       }
-      // v1.2.2（wip2 修正）：functions 检测到 backend 可取号（x-panhub-backend: ok）→
-      // 提示「代理托管账号」已生效，避免用户在弹窗里白填 cookie（proxy 模式下 localStorage 不参与注入）
+      // v1.2.2（wip2 修正）：hop/取号命中**正式账号**时回传 x-panhub-backend: ok（09-03 前全链路
+      // 无人下发该头 → 本 toast 从未触发）→ 提示「代理托管账号」已生效，避免用户在弹窗里白填
+      // cookie（proxy 模式下 localStorage 不参与注入）
       if (!backendOkToastShown.current && getLastProxyBackendOk()) {
         backendOkToastShown.current = true;
         const label = getLastProxyAccountLabel();
@@ -724,6 +726,12 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
         const node = leafNodeOf(f.fid);
         const path = node?.path ?? f.fileName;
         const entry = links!.get(f.fid)!;
+        // v1.2.2 fix（09-02）：缺凭据提示按网盘/大小标注 —— 夸克大文件 OSS 校验是 __puus，
+        // 小文件与 UC 同机制是 __pugs；此前导出命令硬编码 UC __pugs，夸克文件误报且不精准。
+        const credLabel =
+          adapter.id === 'quark'
+            ? `quark ${(f.size ?? 0) >= QUARK_LOGIN_SIZE ? '__puus' : '__pugs'}`
+            : 'UC __pugs';
         return {
           path: keep ? path : path.split('/').pop() ?? f.fileName,
           url: entry.url,
@@ -731,6 +739,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           cookie: entry.cookie, // §12：每文件与其直链同响应的 __pugs，merger 按文件注入
           cookieString: entry.cookieString, // v1.1.9：多凭据整串（夸克登录态 + __pugs）
           hash: entry.hash, // v1.1.9.final：文件校验 hash（夸克 = md5），导出注释行校验下载完整性
+          credLabel, // v1.2.2 fix（09-02）：缺凭据时 curl 注释里的精准话术
           fid: f.fid, // v1.1.5.2：导出后按 fid 查状态做黄色提醒
         };
       });
@@ -1118,14 +1127,21 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             if (filled && retry.length > 0) {
               void doFetchLinks(retry);
             } else if (retry.length > 0) {
-              // v1.2.2 拍板之四：未填 cookie → 按随机游客尝试（大概率直接失败，可试探网盘是否支持游客）。
-              // v1.2.2 fix（09-01 wip3 排查）：空值也要真正发请求 —— 之前只 toast 不重试，
-              // 代理托管模式（BACKEND_URL 取号）下 backend 会自动注入账号，重试即成功；
-              // 无代理时则是名副其实的随机游客试探。
-              toast(
-                '未检测到 selfhost 也未手动填写 cookie：已按随机游客尝试（大概率直接失败，可用于试探网盘是否支持游客）',
-                filled ? 'success' : 'info',
-              );
+              // v1.2.2 拍板之四：未填 cookie → 重试（代理托管/取号模式下后端自动注入账号，重试即成功；
+              // 直连无托管才是名副其实的随机游客试探）。
+              // v1.2.2 fix（09-03）：预判式 toast 只在**直连**（不存在 selfhost）时准确 —— 代理模式下
+              // 后端是否托管就绪只有请求结果能证明：成功 → doFetchLinks 末尾「已使用代理托管账号」toast
+              // （backendOkToastShown 去重）；失败 → 行内红 + 弹窗重试入口。此前守卫用
+              // getLastProxyBackendOk() 读**上一次**响应头预判：首次 prase 弹窗取消时上一次响应必然
+              // 没有该头（09-03 前服务端压根没下发过 x-panhub-backend），取号成功也误报「随机游客」。
+              if (getActiveTransport().id !== 'proxy') {
+                toast(
+                  '未检测到 selfhost 也未手动填写 cookie：已按随机游客尝试（大概率直接失败，可用于试探网盘是否支持游客）',
+                  'info',
+                );
+              } else {
+                addGlobalLog('prase：未手动填写 cookie —— 代理通道已配置，重试结果以服务端实际注入为准');
+              }
               void doFetchLinks(retry);
             }
           }}

@@ -9,10 +9,12 @@
  * - scanner 三连全部零 cookie（游客可读目录树）：token → detail（pdir_fid 递归）→ download
  * - detail 根目录必须 _fetch_banner=1&_fetch_share=1，否则 metadata（_total）不返回，
  *   treeWalker 会当成单页截断（>50 文件的目录树不完整）
- * - download 必带 `?entry=ft&fr=pc&pr=ucpro`；响应 Set-Cookie 下发 __pugs（3h，
- *   Domain=quark.cn）—— 直链**必须**带同响应 __pugs，否则 CDN 412（Tengine precondition）
- * - 大文件（>50MB 实测区间）download 返回 HTTP 400 + code 23018 size limit，
- *   需要登录态 cookie（整串，用户弹窗粘贴）后重试
+ * - download 必带 `?entry=ft&fr=pc&pr=ucpro`；凭据按**实际请求态**绑定（v1.2.2 fix 09-03，与 size 无关）：
+ *   游客请求 → 响应 Set-Cookie 下发 __pugs（3h，Domain=quark.cn），dl-guest-* 直链必带同响应 __pugs
+ *   （否则 CDN 412）；登录请求（账号池注入/本地整串）→ 响应旋转 __puus（3h 会话），dl-pc-* 直链
+ *   只认 __puus（OSS 鉴权，gopeed 实测与 size 无关）
+ * - 大文件（>50MB 实测区间）**游客**请求返回 HTTP 400 + code 23018 size limit，
+ *   需登录态（整串/托管账号池）后重试；登录态下 size 不再决定凭据种类
  * - 直链是签名 URL（auth_key 6h），字符敏感：本层原样透传，不做任何加工
  * - 批量节流（15 个/批 + 1s 间隔）归 core/linkFetcher 管，本文件单次调用只发一批
  */
@@ -34,7 +36,7 @@ import {
   mergeQuarkSetCookies,
   setQuarkCookieString,
 } from './cookies';
-import { API_BASE, DL_QUERY, ERROR_MESSAGES, PC_QUERY, QUARK_DL_UA, QUARK_LOGIN_SIZE, type QuarkDetailItem, type QuarkDownloadItem } from './types';
+import { API_BASE, DL_QUERY, ERROR_MESSAGES, PC_QUERY, QUARK_DL_UA, type QuarkDetailItem, type QuarkDownloadItem } from './types';
 
 /**
  * 最近一次夸克响应的 __pugs（§12 同响应绑定，与 UC 同一机制）：
@@ -42,6 +44,14 @@ import { API_BASE, DL_QUERY, ERROR_MESSAGES, PC_QUERY, QUARK_DL_UA, QUARK_LOGIN_
  * 则绑定到该次返回的每一个 DownloadResult。
  */
 let lastResponsePugs: string | null = null;
+
+/**
+ * 最近一次夸克响应的 __puus（v1.2.2 fix 09-02：登录态直链 OSS 校验令牌，3h 会话）：
+ * 代理托管（selfhost/云端取号）路径下登录态 cookie 由 backend 账号池注入、前端整串不参与，
+ * 服务端若刷新会话会经 x-quark-puus 回传 —— 收口捕获后绑定到 DownloadResult（登录态直链
+ * 都认 __puus，与文件 size 无关，见 09-03 修正）。与 lastResponsePugs 同生命周期。
+ */
+let lastResponseQuarkPuus: string | null = null;
 
 /** 夸克接口错误（携带 code 供 core/errors 分类；文案已是最终中文，可直接展示） */
 export class QuarkApiError extends Error {
@@ -99,6 +109,12 @@ async function request<T, M = unknown>(
   const pugs = capturePugsFromHeaders(res.headers);
   if (pugs) {
     lastResponsePugs = pugs;
+  }
+  // v1.2.2 fix（09-02）：__puus 同通道捕获（x-quark-puus）——托管模式下登录态整串在前端不可见，
+  // 大文件导出凭据只能靠这里拿到（见 lastResponseQuarkPuus 注释）
+  const quarkPuus = res.headers['x-quark-puus'];
+  if (quarkPuus) {
+    lastResponseQuarkPuus = quarkPuus;
   }
   // v1.1.9.1：登录态 __pus/__puus 服务端会定期刷新（__puus 3h 会话）——
   // 代理回传 x-quark-pus/x-quark-puus，这里自动合并回本地整串（alist 同款）
@@ -245,8 +261,9 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
   if (params.fids.length !== params.fidsTokens.length) {
     throw new Error('fids 与 fidsTokens 数量不一致（适配层调用错误）');
   }
-  // §12 同响应绑定：本次调用开始时重置，只有本次响应的 __pugs 才能配本次的直链
+  // §12 同响应绑定：本次调用开始时重置，只有本次响应的 __pugs/__puus 才能配本次的直链
   lastResponsePugs = null;
+  lastResponseQuarkPuus = null;
   // v1.1.9.final：游客模式（qk-guestTurn 开 + 全部 <50MB）——
   // 不注入登录态整串（否则夸克返回登录态 CDN 直链、导出却配 __pugs → 下载掐断），
   // 改用捕获/随机 __pugs 模拟游客（无则不带，让响应下发新的）；默认模式才用登录整串。
@@ -277,7 +294,14 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
     },
     '获取下载直链',
   );
-  // 同响应 pugs（无则不带 cookie，导出命令会附提示）
+  // v1.2.2 fix（09-03）：凭据绑定改为**响应驱动、与文件 size 无关** ——
+  // 托管模式（hop/云端取号）对 quark prase 一律注入正式账号 → 无论大小返回的都是登录态直链
+  // （dl-pc-*），只认 __puus（OSS 鉴权）；真正的游客请求响应才下发 __pugs。
+  // 此前按 isBig 分流：<50MB 的登录态直链只查 __pugs → 漏绑 __puus → 导出/推送六式全缺
+  // oss 凭据（09-03 真机 41.65MB 文件复现：上游回传了 __puus 也被小文件分支丢弃）。
+  // __puus 来源双通道（09-02 定）：直连 = 本地登录整串里的值；代理托管 = backend 注入账号后
+  // 响应回传的 x-quark-puus（09-02 起 hop/取号在上游未刷新时还会兜底回传账号池当前值）。
+  const puus = cookieValueOf(loginCookie, '__puus') ?? lastResponseQuarkPuus;
   const pugs = lastResponsePugs;
   return data.map((item) => {
     if (!item.download_url) {
@@ -289,17 +313,11 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
       size: item.size,
       hash: item.md5, // 夸克 dl 响应给 md5（v1.1.9.final：字段通用化 hash，导出注释行校验下载完整性）
     };
-    // v1.1.9.final：凭据按文件大小分流 ——
-    // 大文件（≥50MB，登录态）：oss 校验令牌**只有 __puus**；绝不返回完整登录 cookie
-    //   （导出文件可能被分享/上传，整串泄露即账号被盗风险）；__pus 是长期凭证更不可出。
-    // 小文件（游客态）：与 UC 同机制，绑定同响应 __pugs 即可。
-    const isBig = (item.size ?? 0) >= QUARK_LOGIN_SIZE;
-    if (isBig) {
-      const puus = cookieValueOf(loginCookie, '__puus');
-      if (puus) {
-        result.cookieString = `__puus=${puus}`;
-        result.cookie = { key: '__puus', value: puus };
-      }
+    // 凭据只拼单 key（__puus / __pugs），绝不带登录整串 —— 导出文件可能被分享/上传，
+    // 整串或 __pus（长期凭证）泄露即账号被盗风险。无凭据则不注入，导出命令附软提示注释。
+    if (puus) {
+      result.cookieString = `__puus=${puus}`;
+      result.cookie = { key: '__puus', value: puus };
     } else if (pugs) {
       result.cookieString = `__pugs=${pugs}`;
       result.cookie = { key: '__pugs', value: pugs };
