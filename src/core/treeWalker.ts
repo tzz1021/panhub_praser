@@ -96,6 +96,10 @@ async function listAll(
 ): Promise<ShareFile[]> {
   const files: ShareFile[] = [];
   let page = 1;
+  // v1.2.x alipan：next_marker 游标制分页 —— 上一次响应的游标原样传回适配器翻页
+  let marker: string | undefined;
+  // 游标制兜底上限（50 条/页 × 200 页 = 1 万条/目录），防异常游标链死循环
+  const MAX_MARKER_PAGES = 200;
   for (;;) {
     const res: ListResult = await sem.run(() =>
       ctx.adapter.list({
@@ -105,11 +109,27 @@ async function listAll(
         page,
         size: PAGE_SIZE,
         isRoot,
+        marker, // 页码制网盘（uc/quark）忽略
       }),
     );
     files.push(...res.files);
+    // 单页空返回：兜底跳出（与 total 制同规则），防异常导致死循环
+    if (res.files.length === 0) {
+      break;
+    }
+    // 游标制优先：有 nextMarker 就按游标翻页，total 制逻辑仅对页码制网盘生效
+    const nextMarker = typeof res.nextMarker === 'string' && res.nextMarker !== '' ? res.nextMarker : null;
+    if (nextMarker) {
+      if (page >= MAX_MARKER_PAGES) {
+        break;
+      }
+      marker = nextMarker;
+      page++;
+      await sleep(pageIntervalMs); // v1.1.6 同款：同目录页间节流，防大宗扫描风控
+      continue;
+    }
     const total = res.total;
-    if (total === undefined || files.length >= total || res.files.length === 0) {
+    if (total === undefined || files.length >= total) {
       break;
     }
     page++;

@@ -6,10 +6,12 @@
  * v1 只注册 UC（开发顺序第 2 步已完成），后续网盘按 src/adapters/README.md 接入：
  *   import { xxxAdapter } from './xxx';
  *   registerAdapter(xxxAdapter);
+ * 现状：uc / quark（v1.1.9）/ alipan（v1.2.x 初稿）
  */
 import type { PanAdapter } from './types';
 import { ucAdapter } from './uc/registry';
 import { quarkAdapter } from './quark/registry';
+import { alipanAdapter } from './alipan/registry';
 
 /** 已注册适配器（先注册者优先，同 id 重复注册忽略） */
 const adapters: PanAdapter[] = [];
@@ -17,6 +19,7 @@ const adapters: PanAdapter[] = [];
 // 模块初始化时注册适配器（必须在 adapters 声明之后，避免 TDZ）
 registerAdapter(ucAdapter);
 registerAdapter(quarkAdapter);
+registerAdapter(alipanAdapter);
 
 /** 注册适配器 */
 export function registerAdapter(adapter: PanAdapter): void {

@@ -15,8 +15,12 @@
  *
  * 边界：
  *   - 只转发 API JSON，不转发文件流（直链是 OSS 签名 URL，用户浏览器直连下载）
- *   - Authorization 类凭据一律丢弃；cookie 头放行（v1.1.9 夸克登录态需要，风险由 SPA 弹窗告知）
- *   - 只转发白名单请求头（content-type / accept / accept-language / cookie），其余全部丢弃
+ *   - cookie 头放行（v1.1.9 夸克登录态需要，风险由 SPA 弹窗告知）；
+ *     v1.2.x alipan 追加 authorization / x-share-token / x-canary / x-device-id：
+ *     alipan prase（转存 + 取直链）的登录态是 Authorization: Bearer（非 cookie），
+ *     x-share-token 是分享源授权（与 Cookie 同风险级，SPA 弹窗已红点告知公用代理自担）
+ *   - 只转发白名单请求头（content-type / accept / accept-language / cookie / user-agent /
+ *     authorization / x-share-token / x-canary / x-device-id），其余全部丢弃
  *
  * 部署：
  *   - Pages 项目根目录放本文件 → 自动生成 POST /api/proxy 路由（与静态站同域，SPA 侧无需跨域）
@@ -35,7 +39,8 @@
 const ALLOWED_HOST_SUFFIXES = [
   'uc.cn', // UC 网盘（token/detail/download 三连全在 pc-api.uc.cn / drive.uc.cn）
   'quark.cn', // 夸克网盘（v1.1.9：token/detail/download 全在 drive-h.quark.cn；大文件需登录 cookie）
-  // 后续接入的网盘域在这里追加，如 'aliyundrive.com'
+  'aliyundrive.com', // 阿里云盘（v1.2.x alipan：scan/prase 全在 api.aliyundrive.com）
+  'alipan.com', // 阿里云盘别名域（api.alipan.com 同构；旧域 www.aliyundrive.com 入口也在 alipan 主域下）
 ];
 
 const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'DELETE'];
@@ -112,9 +117,11 @@ function extractPugs(setCookie) {
   return m ? m[1] : null;
 }
 
-/** 透传前清理请求头：只留白名单；authorization 一律丢弃。
+/** 透传前清理请求头：只留白名单；authorization 类凭据与 cookie 同策略放行（见文件头边界说明）。
  * cookie 例外（v1.1.9 夸克）：登录态 cookie（整串 __pus/__uid/__puus）随 download 请求发送，
  * 大文件（>50MB）必需 —— SPA 弹窗已红点警告“公用代理自担账号安全”，代理端放行。
+ * v1.2.x alipan 例外：authorization（Bearer 登录态）/ x-share-token（分享源授权）/ x-canary /
+ * x-device-id —— alipan 转存与取直链必需（无 cookie 通道），与夸克 cookie 同一风险级。
  *
  * v1.1.9.2 fix2：键名**大小写归一**后再匹配 —— SPA 适配器发的是 'Content-Type'/'Cookie'（大写），
  * JS 对象键区分大小写，直接 headers['cookie'] 会拿不到 → 登录态 cookie 被静默丢弃，
@@ -125,7 +132,17 @@ function forwardHeaders(headers) {
   const out = {};
   const lower = {};
   for (const k of Object.keys(headers ?? {})) lower[k.toLowerCase()] = headers[k];
-  for (const name of ['content-type', 'accept', 'accept-language', 'cookie', 'user-agent']) {
+  for (const name of [
+    'content-type',
+    'accept',
+    'accept-language',
+    'cookie',
+    'user-agent',
+    'authorization',
+    'x-share-token',
+    'x-canary',
+    'x-device-id',
+  ]) {
     const v = lower[name];
     if (typeof v === 'string' && v) out[name] = v;
   }

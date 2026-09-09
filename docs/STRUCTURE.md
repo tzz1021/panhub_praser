@@ -38,10 +38,18 @@ pan-web/
 │   │   │   ├── cookies.ts         #     sdid/up/wk 存取 + 懒人导入解析 + __pugs 捕获
 │   │   │   ├── selector.ts        #     链接识别：短链接 / #/list/share 长链接
 │   │   │   └── jumper.ts          #     0B 文件夹跳转链接构建/解析
+│   │   ├── alipan/                #   阿里云盘子目录（v1.2.x 初稿：第三个网盘，结构与 quark 同构）
+│   │   │   ├── types.ts           #     alipan 静态属性（API 地址/x-canary 阶段值/特性表/原始类型）
+│   │   │   ├── registry.ts        #     组装完整 alipanAdapter
+│   │   │   ├── scanner.ts         #     scan（免登录三连，next_marker 分页）/ prase（两跳：转存→直链）
+│   │   │   ├── auth.ts            #     登录态凭据串（auth=Bearer xxx;to_parent_file_id=…）存取/解析
+│   │   │   ├── selector.ts        #     链接识别：短链接 / /folder/ 深链（双域）
+│   │   │   └── jumper.ts          #     深链文件夹跳转链接构建/解析
 │   │   └── README.md              #   新网盘接入指南（照着 uc/ 抄结构即可）
 │   │
 │   ├── core/                      # ★ 通用逻辑：不依赖任何网盘细节
-│   │   ├── treeWalker.ts          #   目录树递归遍历（并发 2/翻页节流 250ms/大小聚合/jumper 根节点）
+│   │   ├── treeWalker.ts          #   目录树递归遍历（并发 2/翻页节流 250ms/大小聚合/jumper 根节点；
+│   │   │                          #   v1.2.x：兼容 next_marker 游标分页网盘（alipan），uc/quark 页码制不变）
 │   │   ├── linkFetcher.ts         #   批量直链获取（15 个/批 + 1s 节流，参考 LinkSwift）
 │   │   ├── preferences.ts         #   偏好设置（localStorage，默认值见 docs/changelog）
 │   │   ├── errors.ts              #   错误码 → 中文文案 + 错误分类（游客超限/需登录/过期）

@@ -33,7 +33,7 @@ import { addGlobalLog } from '../core/footprint/globalLog';
 import { saveTree } from '../core/footprint/trees';
 import { savePraseEntries, listPraseByShareId, clearPraseByShareId } from '../core/footprint/prase';
 import { getPugs } from '../adapters/uc/cookies';
-import { getQuarkCookieString, setQuarkCookieString, getQuarkPugs } from '../adapters/quark/cookies';
+import { getQuarkPugs } from '../adapters/quark/cookies';
 import { QUARK_LOGIN_SIZE } from '../adapters/quark/types';
 import { CookieInputModal } from '../components/CookieInputModal';
 import { exportTask, exportTreeMd } from '../tasks/export';
@@ -70,6 +70,9 @@ const KIND_LABEL: Record<TaskKind, string> = { aria2: 'aria2', gopeed: 'Gopeed',
 
 export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.Element {
   const { adapter, shareId, url } = session;
+  // v1.2.x alipan：登录态输入规格缓存为 const —— 闭包内直接引用不会丢 narrowing
+  // （quark __pus 整串 / alipan auth 凭据串共用同一弹窗与流程，存取走各适配器 load/save 钩子）
+  const cookieInputReq = adapter.cookieInput;
   const { toast } = useToast();
 
   const prefs = useMemo(() => getPreferences(), []);
@@ -343,9 +346,9 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     // 对 23018 无意义）；填完保存即带登录态 cookie 请求，避免一次必然失败的 400 污染代理日志看板。
     // v1.1.9.final：前置条件 qk-guestTurn —— 开关关（默认）= 所有文件一律按登录态处理（最稳妥）；
     // 开关开 = 正常 size 判断，全部 <50MB 时走游客态（不弹窗、不注入登录态整串，随机 __pugs）。
-    const loginThreshold = adapter.cookieInput?.sizeThreshold;
+    const loginThreshold = cookieInputReq?.sizeThreshold;
     const guestTurn = prefs.quark?.qkGuestTurn === true;
-    if (adapter.cookieInput && prefs.modals.cookieInput && loginThreshold) {
+    if (cookieInputReq && prefs.modals.cookieInput && loginThreshold) {
       const bigFiles = guestTurn ? files.filter((f) => !f.dir && (f.size ?? 0) >= loginThreshold) : files;
       if (bigFiles.length > 0) {
         addGlobalLog(
@@ -435,13 +438,13 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
         await savePraseEntries(shareId, map).catch(() => undefined);
       }
       // v1.1.9：夸克强制登录（23018 超限 / 31001 需登录）→ 弹登录态 cookie 填写窗，保存后自动重试
-      if (adapter.cookieInput) {
+      if (cookieInputReq) {
         const needLogin = toFetch.filter((_, i) => {
           const r = results[i];
           return !r.ok && (r.errorCode === 23018 || r.errorCode === 31001);
         });
         if (needLogin.length > 0 && prefs.modals.cookieInput) {
-          addGlobalLog(`prase：${needLogin.length} 个文件需要登录态 cookie（${adapter.cookieInput.keys.map((k) => k.key).join('/')}），弹出填写窗`);
+          addGlobalLog(`prase：${needLogin.length} 个文件需要登录态 cookie（${cookieInputReq.keys.map((k) => k.key).join('/')}），弹出填写窗`);
           cookieRetryFiles.current = needLogin;
           setCookieInputWarn(true);
         }
@@ -1084,12 +1087,12 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           }}
         />
       )}
-      {/* v1.1.9 登录态 cookie 填写弹窗（夸克 23018/31001 强制登录；保存后自动重试失败文件） */}
-      {cookieInputWarn && adapter.cookieInput && (
+      {/* v1.1.9 登录态凭据填写弹窗（夸克 23018/31001 强制登录 / alipan 缺登录态；保存后自动重试失败文件） */}
+      {cookieInputWarn && cookieInputReq && (
         <CookieInputModal
           panName={adapter.name}
-          cookieInput={adapter.cookieInput}
-          value={adapter.cookieInput.wholeString ? getQuarkCookieString() : {}}
+          cookieInput={cookieInputReq}
+          value={cookieInputReq.load ? cookieInputReq.load() : cookieInputReq.wholeString ? '' : {}}
           onCancel={() => {
             setCookieInputWarn(false);
             const files = cookieRetryFiles.current;
@@ -1121,7 +1124,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           onSave={(value) => {
             setCookieInputWarn(false);
             const filled = typeof value === 'string' ? value.trim().length > 0 : Object.keys(value).length > 0;
-            if (typeof value === 'string') setQuarkCookieString(value);
+            // v1.2.x alipan：整串落库走各适配器 save 钩子（quark 仍存 pan-web:quark-cookie:v1）
+            if (typeof value === 'string' && cookieInputReq.save) cookieInputReq.save(value);
             const retry = cookieRetryFiles.current;
             addGlobalLog(`prase：登录态 cookie 已保存（${filled ? '有值' : '清空'}），重试 ${retry.length} 个失败文件`);
             if (filled && retry.length > 0) {

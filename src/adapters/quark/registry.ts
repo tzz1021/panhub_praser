@@ -9,7 +9,7 @@ import { QUARK_LIMITS, QUARK_HIDDEN_VOLUMN_TEXT, QUARK_LOGIN_SIZE } from './type
 import { quarkScanner, buildHiddenVolumnUrl } from './scanner';
 import { detect, parseShareId } from './selector';
 import { buildJumpUrl, parseJumpUrl } from './jumper';
-import { QUARK_COOKIE_KEYS } from './cookies';
+import { QUARK_COOKIE_KEYS, getQuarkCookieString, setQuarkCookieString } from './cookies';
 
 /** 夸克适配器实例（注册进 registry 后即启用，UI 侧按接口驱动） */
 export const quarkAdapter: PanAdapter = {
@@ -29,6 +29,9 @@ export const quarkAdapter: PanAdapter = {
     // v1.1.9.2 fix1：智能分流 —— 选中含 ≥50MB 大文件时直接弹本窗（跳过 cookieWarn）
     sizeThreshold: QUARK_LOGIN_SIZE, // 实测 41MB 可、51MB 23018，取“约 50MB 以上需登录”
     keys: QUARK_COOKIE_KEYS.map((k) => ({ key: k, label: k })),
+    // v1.2.x alipan 同批泛化：整串存取钩子由各适配器模块自管（弹窗不再硬编码夸克存储键）
+    load: getQuarkCookieString,
+    save: setQuarkCookieString,
     notice:
       '以上被标记的选项属于登录态的 cookie，如果你正在使用公用代理（比如 cloudflare）请自行承担账号安全问题',
     missingHint:

@@ -1,0 +1,128 @@
+/**
+ * 阿里云盘登录态凭据串存取与解析（docs/STRUCTURE.md：src/adapters/alipan/auth.ts）
+ *
+ * 与夸克不同：alipan 没有「下载层自动捕获 cookie」，也不需要浏览器 cookie —— prase（两跳：
+ * 转存 + 取直链）需要的是**登录态 Bearer token** + **转存目标目录**，由用户手动提供。
+ *
+ * 凭据串格式（与 CookieInputModal 整串模式对齐，v1.2.x alipan 定稿）：
+ *   `auth=Bearer xxx;to_parent_file_id=<转存目标目录 file_id>;user-agent=<可选>;x-device-id=<可选>`
+ * - auth：必填。alipan.com 已登录网页 F12 → 任意 /adrive/v2 或 /v2 请求的
+ *   `Authorization: Bearer <jwt>` 整行（可只贴 token，代码自动补 Bearer 前缀）
+ * - to_parent_file_id：必填。自己在 alipan.com/drive 里目标目录的 file_id
+ *   （地址栏 /drive/file/all/<id> 的 <id>）；转存后的文件落这里
+ * - user-agent：可选。缺省用 ALIPAN_DEFAULT_UA
+ * - x-device-id：可选。缺省不带（与「设备标识符可选，默认只写 UA」定稿一致）
+ * - drive_id：可选（预留）。copy 请求是否必须显式 to_drive_id 未验证完（见 scanner TODO）；
+ *   若不可省，将来在格式里加 `drive_id=<自己账号 drive_id>` 即可（解析器已支持）
+ *
+ * 键值顺序固定（auth 在最前），值内部允许出现 `;`（如 UA 的 `(X11; Linux x86_64)`）——
+ * 因此解析用「已知键标记定位」而不是朴素 split(';')，保证 UA 原样还原。
+ *
+ * 存储：localStorage 'pan-web:alipan-auth:v1'，完整凭据串。
+ */
+const STORAGE_KEY = 'pan-web:alipan-auth:v1';
+
+/** 凭据串关键键（弹窗展示/校验用；整串模式下自动检测） */
+export const ALIPAN_AUTH_KEYS = ['auth', 'to_parent_file_id', 'user-agent', 'x-device-id'] as const;
+
+/** 解析结果（缺省值已按定稿填充；auth/token 未填则 auth 为空串） */
+export interface AlipanAuth {
+  /** Authorization 头值（含 Bearer 前缀；未填为空串） */
+  auth: string;
+  /** 转存目标目录 file_id（必填；未填为空串） */
+  toParentFileId: string;
+  /** user-agent（缺省 ALIPAN_DEFAULT_UA） */
+  userAgent?: string;
+  /** x-device-id（可选；缺省不带） */
+  xDeviceId?: string;
+  /** drive_id（可选预留：copy 的 to_drive_id 是否必填未验证完，见 scanner TODO） */
+  driveId?: string;
+}
+
+/** 读取当前保存的 alipan 凭据串；无/损坏返回 '' */
+export function getAlipanAuthString(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const v = window.localStorage.getItem(STORAGE_KEY);
+    return typeof v === 'string' ? v.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+/** 写入 alipan 凭据串（空串 = 清除） */
+export function setAlipanAuthString(authString: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const clean = (authString ?? '').trim();
+    if (clean) window.localStorage.setItem(STORAGE_KEY, clean);
+    else window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // 配额/隐私模式异常静默
+  }
+}
+
+/**
+ * 定位解析：按已知键的段标记切分（键序固定：auth 最先）。
+ * 每段值 = 该键 '=' 之后 到 下一键标记起点；值内部允许出现 ';'（UA 的 `(X11; Linux x86_64)`）
+ * 与朴素 split(';') 的区别：后出现的键用 (?:^|;) 前缀定位，不会把 UA 内的 ';' 误当成新段。
+ */
+export function parseAlipanAuthString(authString: string): AlipanAuth {
+  const src = (authString ?? '').trim();
+  const out: AlipanAuth = { auth: '', toParentFileId: '' };
+  if (!src) return out;
+
+  const KEYS = ['auth', 'to_parent_file_id', 'user-agent', 'x-device-id', 'drive_id'] as const;
+  // 收集每个键首次出现的段标记（(?:^|;) 允许裸 auth= 开头，也允许 '; ' 带空格分隔）；
+  // 值段 = 该键 '=' 之后 到 下一键的段标记起点（markerStart），中间内容含 ';' 也原样保留
+  const spans: Array<{ key: string; markerStart: number; valueStart: number }> = [];
+  for (const k of KEYS) {
+    const m = new RegExp('(?:^|;)\\s*' + k + '=').exec(src);
+    if (!m) continue;
+    if (!spans.some((s) => s.key === k)) spans.push({ key: k, markerStart: m.index, valueStart: m.index + m[0].length });
+  }
+  // 按段起点排序：上一键的值在下一键的 markerStart 处结束（末段到串尾）
+  spans.sort((a, b) => a.markerStart - b.markerStart);
+  spans.forEach((s, i) => {
+    const end = i + 1 < spans.length ? Math.max(s.valueStart, spans[i + 1].markerStart) : src.length;
+    const value = src.slice(s.valueStart, end).trim();
+    if (!value) return;
+    switch (s.key) {
+      case 'auth':
+        out.auth = value;
+        break;
+      case 'to_parent_file_id':
+        out.toParentFileId = value;
+        break;
+      case 'user-agent':
+        out.userAgent = value;
+        break;
+      case 'x-device-id':
+        out.xDeviceId = value;
+        break;
+      case 'drive_id':
+        out.driveId = value;
+        break;
+    }
+  });
+  return out;
+}
+
+/** 从 key/value 映射拼凭据串（导入解析后的落库形态；与 cookie 整串同分隔风格） */
+export function buildAlipanAuthString(map: Record<string, string>): string {
+  return Object.entries(map)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
+}
+
+/** 当前凭据串里已有的关键键（弹窗展示“已检测到 auth/to_parent_file_id…”） */
+export function alipanAuthKeysPresent(authString: string): string[] {
+  const esc = (k: string) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return ALIPAN_AUTH_KEYS.filter((k) => new RegExp(`(?:^|;)\\s*${esc(k)}=`).test(authString ?? ''));
+}
+
+/** 是否具备转存条件（auth 是硬前提；to_parent_file_id 决定能否落盘，缺了会弹窗提示补） */
+export function hasAlipanAuth(authString: string): boolean {
+  return parseAlipanAuthString(authString).auth.length > 0;
+}

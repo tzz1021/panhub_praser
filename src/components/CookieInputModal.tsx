@@ -1,14 +1,18 @@
 /**
- * 登录态 cookie 填写/导入弹窗（docs/STRUCTURE.md：src/components/CookieInputModal.tsx）
+ * 登录态凭据填写/导入弹窗（docs/STRUCTURE.md：src/components/CookieInputModal.tsx）
  *
  * v1.1.9：夸克 >50MB 大文件强制登录（23018 size limit）时弹出，
  * 让用户**手动填写/导入**登录态 cookie（整串），随 download API 请求发送。
+ * v1.2.x alipan 泛化：同一弹窗也服务 alipan 的「登录态凭据串」
+ * （auth=Bearer xxx;to_parent_file_id=…，非浏览器 cookie）——
+ * 检测/拼串改由 cookieInput.keys 驱动；browserCookie:false 时隐藏插件/导入行，
+ * intro/wholeStringPlaceholder 允许按网盘定制文案。
  * 与 CookieWarnModal 的区别：那是展示自动捕获的游客态凭据；这是填登录态凭据。
  *
  * 内容（按 Tzz 弹窗规范）：
- * - 供应商名 + 「下面是本次获取到的必要 cookie 值」+ 各键填写框（如实展示）
+ * - 供应商名 + 说明行 + 整串输入框（如实展示）
  * - 懒人导入：选择文件（Netscape）/ 粘贴文本自动识别（Netscape / JSON / Header string）
- * - 红色圆点：登录态 cookie 风险提示（公用代理自担账号安全）
+ * - 红色圆点：登录态风险提示（公用代理自担账号安全）
  * - 插件推荐：get cookies.txt locally（chrome/edge/safari）+ 本机插件模式 / 自建代理
  * - 自建代理不显示时排查话术（账号状态 + 代理面板登录态）
  */
@@ -16,11 +20,21 @@ import { useRef, useState } from 'react';
 import type { JSX } from 'react';
 import type { CookieInputRequirement } from '../adapters/types';
 import { getLastProxyAccountLabel } from '../core/transport/types';
-import {
-  parseCookieText,
-  buildQuarkCookieString,
-  quarkCookieKeysPresent,
-} from '../adapters/quark/cookies';
+import { parseCookieText } from '../adapters/quark/cookies';
+
+/** 整串里检测哪些声明键已出现（键值按 `k=` 段定位；值内 ';' 不影响存在性判断） */
+function detectedKeys(text: string, keys: Array<{ key: string; label: string }>): string[] {
+  const esc = (k: string) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return keys.map((k) => k.key).filter((k) => new RegExp(`(?:^|;)\\s*${esc(k)}=`).test(text));
+}
+
+/** 解析出的 k/v 映射 → 整串（k=v; k2=v2；v2 含 ';' 也原样保留） */
+function kvString(map: Record<string, string>): string {
+  return Object.entries(map)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
+}
 
 export interface CookieInputModalProps {
   /** 网盘名称（如 "夸克网盘"） */
@@ -77,12 +91,14 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
   /** 把解析结果填进输入（整串模式直接替换；多键模式按声明键合并） */
   const applyParsed = (parsed: Record<string, string>): void => {
     if (wholeString) {
-      setFieldStr(buildQuarkCookieString(parsed));
-      const found = quarkCookieKeysPresent(buildQuarkCookieString(parsed));
+      const joined = kvString(parsed);
+      setFieldStr(joined);
+      // v1.2.x alipan 泛化：检测键从 cookieInput.keys 取（夸克 __pus 系 / alipan auth 系）
+      const found = detectedKeys(joined, cookieInput.keys);
       setImportMsg(
         found.length > 0
           ? { ok: true, text: `识别到登录态 key：${found.join(' / ')}，已填入` }
-          : { ok: false, text: '未识别到关键登录 key（__pus 等），请检查导出内容' },
+          : { ok: false, text: `未识别到关键 key（${cookieInput.keys.map((k) => k.key).join(' / ')}），请检查导出内容` },
       );
       return;
     }
@@ -148,7 +164,8 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
         </div>
         <div className="modal-body">
           <p style={{ margin: 0, color: 'var(--text-dim)' }}>
-            <strong>{panName}</strong> 需要 cookie 鉴权，下面是本次获取到的必要 cookie 值 【如实显示】：
+            <strong>{panName}</strong>{' '}
+            {cookieInput.intro ?? '需要 cookie 鉴权，下面是本次获取到的必要 cookie 值 【如实显示】：'}
           </p>
 
           {/* v1.2.2：代理托管账号提示（响应头 x-panhub-account；仅展示 label，不暴露任何 cookie 明文） */}
@@ -175,26 +192,32 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
             </p>
           )}
 
-          {/* 整串模式：单个大输入框（粘贴完整 cookie，最稳）；多键模式：各 key 填写框 */}
+          {/* 整串模式：单个大输入框（粘贴完整 cookie 字符串，最稳）；多键模式：各 key 填写框 */}
           {wholeString ? (
             <div style={{ margin: '10px 0' }}>
               <textarea
                 value={fieldStr}
                 onChange={(e) => setFieldStr(e.target.value)}
-                placeholder={'粘贴完整 cookie 字符串（含 __pus 等；\n从已登录浏览器复制，或用下方导入）'}
-                rows={4}
+                placeholder={
+                  cookieInput.wholeStringPlaceholder ??
+                  '粘贴完整 cookie 字符串（含 __pus 等；\n从已登录浏览器复制，或用下方导入）'
+                }
+                rows={cookieInput.wholeStringPlaceholder ? 7 : 4}
                 style={{ width: '100%', fontFamily: 'monospace', fontSize: 12, boxSizing: 'border-box' }}
               />
               {(() => {
-                const found = quarkCookieKeysPresent(fieldStr);
+                // v1.2.x alipan 泛化：检测键从 cookieInput.keys 取（不再硬编码夸克 __pus）
+                const keys = cookieInput.keys ?? [];
+                const found = detectedKeys(fieldStr, keys);
+                const required = keys[0]?.key ?? '';
                 return found.length > 0 ? (
                   <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-dim)' }}>
                     已检测到登录态 key：{found.join(' / ')}
-                    {!found.includes('__pus') && '（缺少 __pus，可能无法解锁大文件）'}
+                    {required && !found.includes(required) && `（缺少 ${required}，可能无法通过鉴权）`}
                   </p>
                 ) : (
                   <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-faint)' }}>
-                    未检测到 __pus —— 登录态 cookie 通常长这样：__pus=xxxx; __uid=xxxx
+                    未检测到必要 key（{keys.map((k) => k.key).join(' / ')}），请检查粘贴内容
                   </p>
                 );
               })()}
@@ -216,29 +239,31 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
             </div>
           )}
 
-          {/* 懒人导入 */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".txt,.json,text/plain,application/json"
-              style={{ display: 'none' }}
-              onChange={(e) => void handleFile(e.target.files?.[0])}
-            />
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()}>
-              选择文件
-            </button>
-            <input
-              type="text"
-              value={pasteText}
-              onChange={(e) => setPasteText(e.target.value)}
-              placeholder="或粘贴 cookie（Netscape / JSON / Header 任意格式）"
-              style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }}
-            />
-            <button type="button" className="btn btn-ghost btn-sm" onClick={handlePasteImport}>
-              识别导入
-            </button>
-          </div>
+          {/* 懒人导入（仅浏览器 cookie 类凭据展示；alipan 等凭据串手填即可，v1.2.x） */}
+          {cookieInput.browserCookie !== false && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".txt,.json,text/plain,application/json"
+                style={{ display: 'none' }}
+                onChange={(e) => void handleFile(e.target.files?.[0])}
+              />
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()}>
+                选择文件
+              </button>
+              <input
+                type="text"
+                value={pasteText}
+                onChange={(e) => setPasteText(e.target.value)}
+                placeholder="或粘贴 cookie（Netscape / JSON / Header 任意格式）"
+                style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }}
+              />
+              <button type="button" className="btn btn-ghost btn-sm" onClick={handlePasteImport}>
+                识别导入
+              </button>
+            </div>
+          )}
           {importMsg && (
             <p style={{ margin: 0, fontSize: 12, color: importMsg.ok ? 'var(--text-dim)' : '#dc3545' }}>
               {importMsg.text}
@@ -247,18 +272,20 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
 
           <div style={{ marginTop: 10, borderTop: '1px solid var(--border, #e5e7eb)', paddingTop: 8 }}>
             <RedDot>{cookieInput.notice ?? '以上选项属于登录态的 cookie'}</RedDot>
-            <RedDot>
-              推荐使用插件 get cookies.txt locally 获取
-              {PLUGIN_LINKS.map((l) => (
-                <span key={l.label}>
-                  {' '}
-                  <a href={l.href} target="_blank" rel="noreferrer">
-                    {l.label}
-                  </a>
-                  {l.note ?? ''}
-                </span>
-              ))}
-            </RedDot>
+            {cookieInput.browserCookie !== false && (
+              <RedDot>
+                推荐使用插件 get cookies.txt locally 获取
+                {PLUGIN_LINKS.map((l) => (
+                  <span key={l.label}>
+                    {' '}
+                    <a href={l.href} target="_blank" rel="noreferrer">
+                      {l.label}
+                    </a>
+                    {l.note ?? ''}
+                  </span>
+                ))}
+              </RedDot>
+            )}
             <RedDot>
             更推荐：使用{' '}
             <a href="http://github.com/tzz1021/panhub_praser/tree/dev" target="_blank" rel="noreferrer">

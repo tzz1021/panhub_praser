@@ -61,6 +61,11 @@ export interface ListParams {
   size?: number;
   /** 是否为根目录（UC 根目录需带 _fetch_banner/_fetch_share 扩展字段） */
   isRoot?: boolean;
+  /**
+   * v1.2.x alipan：分页游标（next_marker 制网盘用）。treeWalker 把上一次响应的
+   * nextMarker 原样传回，适配器翻页时带上；页码制网盘（uc/quark）忽略本字段，行为不变。
+   */
+  marker?: string;
 }
 
 /** 列目录结果 */
@@ -68,6 +73,11 @@ export interface ListResult {
   files: ShareFile[];
   /** 总数（网盘返回时提供） */
   total?: number;
+  /**
+   * v1.2.x alipan：下一页游标（next_marker 制网盘返回；空串/缺省 = 无更多页）。
+   * 有值时 treeWalker 优先按游标继续翻页（total 制逻辑只对页码制网盘生效）。
+   */
+  nextMarker?: string;
 }
 
 /** 批量取直链参数（UC：POST file/download?entry=ft&fr=pc&pr=UCBrowser） */
@@ -165,8 +175,28 @@ export interface CookieInputRequirement {
   /** 整串模式：true = 弹窗显示单个大输入框（粘贴/导入完整 cookie 字符串）；
    * false/缺省 = 按 keys 渲染多个填写框（旧行为） */
   wholeString?: boolean;
+  /**
+   * v1.2.x alipan：整串模式存取钩子 —— 各网盘凭据串的 localStorage 键不同
+   * （夸克 pan-web:quark-cookie:v1 / alipan pan-web:alipan-auth:v1），由各适配器
+   * 自己的 auth/cookies 模块提供，UI 不需要知道存储键。缺省 = 不预设（回填空）。
+   */
+  load?: () => string;
+  /** 与 load 对应的保存钩子（用户点「保存并重试」后落库）；缺省 = 丢弃。 */
+  save?: (value: string) => void;
   /** 各 cookie 键（整串模式下用于展示/校验“已检测到哪些关键 key”；多键模式下渲染填写框） */
   keys: Array<{ key: string; label: string }>;
+  /**
+   * v1.2.x alipan：弹窗顶部说明行文案（覆盖默认“需要 cookie 鉴权…”）——
+   * alipan 的凭据不是浏览器 cookie，需说明 token + 转存目标目录的填写方式。
+   */
+  intro?: string;
+  /** 整串模式大输入框的 placeholder（缺省 = 夸克默认文案） */
+  wholeStringPlaceholder?: string;
+  /**
+   * 凭据是否为浏览器 cookie（v1.2.x alipan 传 false）：
+   * true = 展示「get cookies.txt 插件」推荐与懒人导入行；false = 隐藏（凭据串手填即可）。
+   */
+  browserCookie?: boolean;
   /**
    * 大文件登录阈值（字节）：选中文件里有 ≥ 该大小（如夸克 50MB）时，prase 直接弹
    * 登录态填写窗、跳过游客态 cookie 警告 —— 反正 download 必返回 23018，
