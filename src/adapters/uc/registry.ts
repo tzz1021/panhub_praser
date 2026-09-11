@@ -6,7 +6,7 @@
  * 子目录对应文件，本文件一般不动。
  */
 import type { PanAdapter } from '../types';
-import { UC_LIMITS, UC_HIDDEN_VOLUMN_TEXT } from './types';
+import { UC_LIMITS, UC_HIDDEN_VOLUMN_TEXT, UC_DOWNLOAD_HEADERS } from './types';
 import { ucScanner, buildHiddenVolumnUrl } from './scanner';
 import { detect, parseShareId } from './selector';
 import { buildJumpUrl, parseJumpUrl } from './jumper';
@@ -16,6 +16,8 @@ export const ucAdapter: PanAdapter = {
   id: 'uc',
   name: 'UC 网盘',
   limits: UC_LIMITS,
+  // v1.2.x：下载层静态头（导出/推送命令按文件注入；UA 原值从旧 tasks/curl.ts 迁来）
+  downloadHeaders: UC_DOWNLOAD_HEADERS,
   cookie: {
     key: '__pugs',
     displayName: '__pugs',

@@ -5,15 +5,15 @@
  * 转存 + 取直链）需要的是**登录态 Bearer token** + **转存目标目录**，由用户手动提供。
  *
  * 凭据串格式（与 CookieInputModal 整串模式对齐，v1.2.x alipan 定稿）：
- *   `auth=Bearer xxx;to_parent_file_id=<转存目标目录 file_id>;user-agent=<可选>;x-device-id=<可选>`
+ *   `auth=Bearer xxx;drive_id=xxx;to_parent_file_id=<转存目标目录 file_id>;user-agent=<可选>;x-device-id=<可选>`
  * - auth：必填。alipan.com 已登录网页 F12 → 任意 /adrive/v2 或 /v2 请求的
- *   `Authorization: Bearer <jwt>` 整行（可只贴 token，代码自动补 Bearer 前缀）
+ *   `Authorization: Bearer <jwt>` 整行（可只贴 token，代码自动补 Bearer 前缀）；有效期≈2h
+ * - drive_id：必填。自己账号的 drive_id（与 auth 同一份 F12 抓包：/adrive/v2/... 请求
+ *   响应体或后续请求 body 里的 drive_id 字段，长数字串）—— copy 转存与 get_download_url 都要
  * - to_parent_file_id：必填。自己在 alipan.com/drive 里目标目录的 file_id
  *   （地址栏 /drive/file/all/<id> 的 <id>）；转存后的文件落这里
  * - user-agent：可选。缺省用 ALIPAN_DEFAULT_UA
  * - x-device-id：可选。缺省不带（与「设备标识符可选，默认只写 UA」定稿一致）
- * - drive_id：可选（预留）。copy 请求是否必须显式 to_drive_id 未验证完（见 scanner TODO）；
- *   若不可省，将来在格式里加 `drive_id=<自己账号 drive_id>` 即可（解析器已支持）
  *
  * 键值顺序固定（auth 在最前），值内部允许出现 `;`（如 UA 的 `(X11; Linux x86_64)`）——
  * 因此解析用「已知键标记定位」而不是朴素 split(';')，保证 UA 原样还原。
@@ -22,21 +22,21 @@
  */
 const STORAGE_KEY = 'pan-web:alipan-auth:v1';
 
-/** 凭据串关键键（弹窗展示/校验用；整串模式下自动检测） */
-export const ALIPAN_AUTH_KEYS = ['auth', 'to_parent_file_id', 'user-agent', 'x-device-id'] as const;
+/** 凭据串关键键（弹窗展示/校验用；整串模式下自动检测；顺序 = 推荐书写顺序） */
+export const ALIPAN_AUTH_KEYS = ['auth', 'drive_id', 'to_parent_file_id', 'user-agent', 'x-device-id'] as const;
 
 /** 解析结果（缺省值已按定稿填充；auth/token 未填则 auth 为空串） */
 export interface AlipanAuth {
   /** Authorization 头值（含 Bearer 前缀；未填为空串） */
   auth: string;
+  /** 账号 drive_id（必填；copy 显式 to_drive_id + get_download_url 用；未填为空串） */
+  driveId?: string;
   /** 转存目标目录 file_id（必填；未填为空串） */
   toParentFileId: string;
   /** user-agent（缺省 ALIPAN_DEFAULT_UA） */
   userAgent?: string;
   /** x-device-id（可选；缺省不带） */
   xDeviceId?: string;
-  /** drive_id（可选预留：copy 的 to_drive_id 是否必填未验证完，见 scanner TODO） */
-  driveId?: string;
 }
 
 /** 读取当前保存的 alipan 凭据串；无/损坏返回 '' */
@@ -72,7 +72,7 @@ export function parseAlipanAuthString(authString: string): AlipanAuth {
   const out: AlipanAuth = { auth: '', toParentFileId: '' };
   if (!src) return out;
 
-  const KEYS = ['auth', 'to_parent_file_id', 'user-agent', 'x-device-id', 'drive_id'] as const;
+  const KEYS = ['auth', 'drive_id', 'to_parent_file_id', 'user-agent', 'x-device-id'] as const;
   // 收集每个键首次出现的段标记（(?:^|;) 允许裸 auth= 开头，也允许 '; ' 带空格分隔）；
   // 值段 = 该键 '=' 之后 到 下一键的段标记起点（markerStart），中间内容含 ';' 也原样保留
   const spans: Array<{ key: string; markerStart: number; valueStart: number }> = [];

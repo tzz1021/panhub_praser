@@ -102,6 +102,11 @@ export interface LinkResult {
   cookieString?: string;
   /** 文件校验 hash（网盘而异：夸克 = md5；导出时附注释行，用于校验下载完整性） */
   hash?: string;
+  /**
+   * 直链绝对过期时间 ms（v1.2.x 复用分家）：uc/quark 解析自 URL Expires/auth_key，
+   * alipan 取响应 expire_time。linkStatus 以此为主做直链复用判定，偏好窗口不再参与。
+   */
+  expiresAt?: number;
 }
 
 /** 批量直链获取配置（linkFetcher；节流参数参考 LinkSwift：15 个/批 + 1s） */
@@ -256,8 +261,9 @@ export interface Preferences {
   quark: QuarkPrefs;
   /**
    * 资源复用窗口（小时，v1.1.4）：0 = 不复用。
-   * - ls 复用：窗口内从历史/足迹再进同一分享，直接复用缓存目录树 + stoken，不重新拉取；
-   * - prase 复用：窗口内已解析成功的文件复用之前的 oss+sig（download 直链），不再请求接口。
+   * v1.2.x 复用分家：本偏好只决定 **scan（资源列表）快照** 复用 —— 窗口内从历史/足迹
+   * 再进同一分享，直接复用缓存目录树 + stoken，不重新拉取；**prase（直链）复用不再看
+   * 本窗口**，改按上游过期时间（LinkEntry.expiresAt / 直链 URL Expires/auth_key）判定。
    */
   reuseWindowHours: number;
   /** 足迹偏好 */
@@ -371,6 +377,11 @@ export interface LinkEntry {
   cookieString?: string;
   /** 文件校验 hash（网盘而异：夸克 = md5；导出时附注释行，用于校验下载完整性） */
   hash?: string;
+  /**
+   * 直链绝对过期时间 ms（v1.2.x）：适配器解析直链 URL Expires/auth_key 或响应
+   * expire_time 后填充；linkStatus 以它为主判定可用性（偏好窗口只管 scan 快照）。
+   */
+  expiresAt?: number;
   /** v1.1.5：cookie 弹窗选「算了吧」手动终止解析的时间戳（仅单文件解析会写） */
   terminatedAt?: number;
 }
@@ -391,6 +402,13 @@ export interface ExportFile {
   cookieString?: string;
   /** 文件校验 hash（网盘而异：夸克 = md5；导出时附注释行，用于校验下载完整性） */
   hash?: string;
+  /**
+   * v1.2.x 下载层静态头（各盘声明于适配器 types.ts，ResultPage 组装时从
+   * session.adapter.downloadHeaders 合并进每文件）：curl 映射 -A/-e、aria2 映射
+   * --user-agent/--referer、gopeed 映射 extra.header；cookie/cookieString 动态头
+   * 逻辑保留现状不受影响。缺省 = 该文件命令不带静态头（仅按 cookie 逻辑）。
+   */
+  headers?: Record<string, string>;
   /**
    * v1.2.2 fix（09-02）：缺凭据提示标签（网盘名 + 应绑定的凭据 key，如夸克大文件 = "quark __puus"）。
    * 调用方按适配器/文件大小标注；任务生成器只在无 cookie 时把提示注释写进导出命令（此前硬编码 UC __pugs，夸克误报）。

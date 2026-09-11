@@ -25,8 +25,6 @@ export interface DirectoryTreeProps {
   checked: ReadonlySet<string>;
   /** fid → 直链结果（批量解析后；含获取时间/终止标记，v1.1.5） */
   links: ReadonlyMap<string, LinkEntry>;
-  /** 复用窗口小时（直链新鲜/过期判定，与设置一致） */
-  reuseWindowHours: number;
   onToggleDir: (fid: string) => void;
   onToggleFile: (fid: string) => void;
   onToggleDirAll: (node: TreeNode) => void;
@@ -59,7 +57,6 @@ export function DirectoryTree({
   onToggleDirAll,
   onParseFile,
   busy,
-  reuseWindowHours,
   onJumpToFolder,
   showDirProps,
   dirProps,
@@ -96,7 +93,7 @@ export function DirectoryTree({
             const f = node.file;
             const isDir = Boolean(f.dir);
             const link = links.get(f.fid);
-            const detail: LinkDetail = linkDetailOf(link, reuseWindowHours, f.size);
+            const detail: LinkDetail = linkDetailOf(link, f.size);
             const status: LinkStatusKind = detail.kind === 'green' ? 'green' : detail.kind === 'yellow' ? 'yellow' : detail.kind === 'failed' || detail.kind === 'terminated' ? 'red' : 'white';
             const rowClass =
               status === 'green' ? 'file-row--green' : status === 'yellow' ? 'file-row--yellow' : status === 'red' ? 'file-row--red' : '';
@@ -160,13 +157,13 @@ export function DirectoryTree({
                   {/* v1.1.7：设置开启时显示详细状态文本（上次HH:MM剩xHxM） */}
                   {!isDir && showLinkDetail && link && (
                     <span className="field-hint" style={{ color: statusColor, marginRight: 6 }}>
-                      {linkStatusLabel(link, reuseWindowHours, f.size)}
+                      {linkStatusLabel(link, f.size)}
                     </span>
                   )}
                   {/* v1.1.7：yellow 行预留状态文本宽度占位（按钮与 white 行错开，对齐一致性） */}
                   {!isDir && !showLinkDetail && detail.kind === 'yellow' && link && onParseFile && (
                     <span className="field-hint" style={{ visibility: 'hidden', marginRight: 6 }}>
-                      {linkStatusLabel(link, reuseWindowHours, f.size)}
+                      {linkStatusLabel(link, f.size)}
                     </span>
                   )}
                   {/* v1.1.6：风控导致的 0B 文件夹（children=undefined 且 size=0）→ 转到此文件夹（二次获取） */}

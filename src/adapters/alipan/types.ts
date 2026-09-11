@@ -42,8 +42,16 @@ export const CANARY_ADRIVE = 'client=windows,app=adrive,version=v6.0.0';
 export const ALIPAN_DEFAULT_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36';
 
-/** 下载防盗链 Referer（精确值；导出命令必带，见交付摘要开放问题） */
 export const ALIPAN_DOWNLOAD_REFERER = 'https://www.alipan.com/';
+
+/**
+ * 下载层静态头（v1.2.x，与 *_LIMITS 并列声明）：导出/推送命令按文件注入（ExportFile.headers）。
+ * Referer 为**精确值** —— 直链 OSS 签名把 Referer 绑进 x-oss-additional-headers，
+ * 其他值 403、缺失 400（实测）；UA 可选（OSS 不校验），不在静态头里写死。
+ */
+export const ALIPAN_DOWNLOAD_HEADERS = {
+  Referer: ALIPAN_DOWNLOAD_REFERER,
+} as const;
 
 /**
  * 错误码 → 中文文案（alipan 错误 = HTTP 状态 + body { code: 'xxx', message }，
@@ -54,6 +62,19 @@ export const ALIPAN_DOWNLOAD_REFERER = 'https://www.alipan.com/';
 export const ERROR_MESSAGES: Record<string, string> = {
   ForbiddenNoPermission_File: '无权访问该文件（阿里云盘不允许直接下载他人分享文件，必须转存到自己的网盘后取直链）',
   ForbiddenNoPermission: '无权限执行该操作，请检查登录态与目标目录权限',
+  // 转存内层 400（batch responses[].body.code；2026-09 实测语义）
+  QuotaExhausted_Drive: '转存空间不足，请清理目标目录或换账号',
+  // 登录态失效（get_download_url / batch 401 body.code）—— 提示重新填写即可，别的不用动
+  AccessTokenInvalid: 'auth 已过期，请重新填写（回 alipan.com 重新复制 Authorization）',
+  AccessTokenExpired: 'auth 已过期，请重新填写（回 alipan.com 重新复制 Authorization）',
+};
+
+/** 转存内层错误码 → 友好中文（无映射时 fallback 到上游 message 兜底，scanner 里内联） */
+export const COPY_ERROR_MESSAGES: Record<string, string> = {
+  // 403 ForbiddenNoPermission.File（copy 该文件无权限，单文件失败不阻断整批）
+  ForbiddenNoPermission_File: '该文件无权转存（分享者未开放或文件已被移除），请跳过或刷新资源列表后重试',
+  // 400 QuotaExhausted.Drive：目标网盘空间不足（整批转存都会失败）
+  QuotaExhausted_Drive: '转存空间不足，请清理目标目录或换账号',
 };
 
 /** alipan 请求/响应内容类型（分享态 vs 登录态仅由 headers 区分） */

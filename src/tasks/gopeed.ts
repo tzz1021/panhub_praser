@@ -12,7 +12,8 @@
  * - 鉴权：X-Api-Token: <接口令牌>（不是 Authorization: Bearer）
  * - 保存目录语义：opts.path 为绝对目录，缺省 "" 时用 Gopeed 配置的默认下载目录
  *   （DownloaderStoreConfig.downloadDir）；opts.name 指定文件名。
- * - 请求头（§12 同响应绑定，UC = __pugs）：req.extra.header（单数 header）
+ * - 请求头（§12 同响应绑定，UC = __pugs）：req.extra.header（单数 header）。
+ *   v1.2.x：静态下载头（User-Agent/Referer，来自 ExportFile.headers）与 Cookie 合并进同一 header 对象。
  *
  * 约定：
  * - keepStructure=true：opts.path = baseDir + 相对目录（path 去掉文件名部分）；
@@ -66,7 +67,9 @@ export interface GopeedBatchPayload {
 /**
  * 生成 Gopeed REST 批量添加任务 payload（v1.1.8 抽取：导出 JSON 与 API 直推共用；
  * v1.1.8.1 改 REST 格式）。
- * 下载凭据（§12 同响应绑定，UC = __pugs）：有则注入 req.extra.header.Cookie，无则不带 extra。
+ * 下载凭据（§12 同响应绑定，UC = __pugs）：有则注入 req.extra.header.Cookie，无则不带 extra；
+ * v1.2.x 起静态下载头（ExportFile.headers = adapter.downloadHeaders，如 alipan 精确 Referer）
+ * 同样合并进 extra.header（无 Cookie 但带静态头时也生成 extra）。
  * v1.1.9.final：options.gopeedExtra（设置 → 高级功能）为合法 JSON 对象时合并进每个任务 opts
  * （如 {"connections":16}；Gopeed opts 接受连接数等选项；非 JSON/非对象忽略）。
  */
@@ -92,10 +95,18 @@ export function buildGopeedTasks(files: ExportFile[], options: TaskOptions): Gop
     } else {
       path = baseDir;
     }
+    // v1.2.x：header 合并 = 静态下载头（ExportFile.headers = adapter.downloadHeaders，如 alipan 精确
+    // Referer）+ 动态凭据 Cookie（§12 同响应绑定）；两者皆无 → 不带 extra
+    const staticHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(f.headers ?? {})) {
+      if (v) staticHeaders[k] = v;
+    }
+    const ck = cookieOf(f);
+    const header = ck ? { ...staticHeaders, Cookie: ck } : Object.keys(staticHeaders).length > 0 ? staticHeaders : null;
     return {
       req: {
         url: f.url,
-        ...(cookieOf(f) ? { extra: { header: { Cookie: cookieOf(f) } } } : {}), // §12
+        ...(header ? { extra: { header } } : {}), // §12：Cookie 走 extra.header（单数键）
       },
       opts: {
         name: fileNameOf(f.path),

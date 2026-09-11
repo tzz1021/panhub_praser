@@ -28,6 +28,7 @@ import type {
   TokenResult,
 } from '../types';
 import { getActiveTransport, TransportError, type TransportResponse } from '../../core/transport/types';
+import { ossUrlExpiryMs } from '../../utils/linkStatus';
 import {
   capturePugsFromHeaders,
   cookieValueOf,
@@ -253,13 +254,24 @@ async function list(params: ListParams): Promise<ListResult> {
   return res;
 }
 
-/** 第 3 步：批量获取下载直链（reverse-notes-quark §2.3；每次调用 = 一批，节流归 linkFetcher） */
+/** 第 3 步：批量获取下载直链（reverse-notes-quark §2.3；每次调用 = 一批，节流归 linkFetcher）
+ *
+ * v1.2.x 契约收窄：files 由调用方保证顺序；shareFidToken 是 UC/夸克专属逐文件令牌
+ * （alipan 无此字段）—— 缺令牌的文件在**对应下标**产出失败项、不进请求，
+ * 其余带令牌文件照常整批发（linkFetcher 按输入顺序回填）。 */
 async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[]> {
-  if (params.fids.length === 0) {
-    return [];
-  }
-  if (params.fids.length !== params.fidsTokens.length) {
-    throw new Error('fids 与 fidsTokens 数量不一致（适配层调用错误）');
+  // 占位数组（下标 = 输入顺序）；缺 shareFidToken 的文件在原下标产出失败项、不进请求
+  const results: DownloadResult[] = new Array(params.files.length);
+  const pending: Array<{ idx: number; fid: string; token: string }> = [];
+  params.files.forEach((file, idx) => {
+    if (file.shareFidToken) {
+      pending.push({ idx, fid: file.fid, token: file.shareFidToken });
+    } else {
+      results[idx] = { url: '', error: '文件令牌缺失，请重新解析', errorCode: 'missing-token' };
+    }
+  });
+  if (pending.length === 0) {
+    return results;
   }
   // §12 同响应绑定：本次调用开始时重置，只有本次响应的 __pugs/__puus 才能配本次的直链
   lastResponsePugs = null;
@@ -286,8 +298,8 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
         ...(requestCookie ? { Cookie: requestCookie } : {}),
       },
       body: JSON.stringify({
-        fids: params.fids,
-        fids_token: params.fidsTokens,
+        fids: pending.map((p) => p.fid),
+        fids_token: pending.map((p) => p.token),
         pwd_id: params.shareId,
         stoken: params.stoken,
       }),
@@ -303,14 +315,16 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
   // 响应回传的 x-quark-puus（09-02 起 hop/取号在上游未刷新时还会兜底回传账号池当前值）。
   const puus = cookieValueOf(loginCookie, '__puus') ?? lastResponseQuarkPuus;
   const pugs = lastResponsePugs;
-  return data.map((item) => {
+  data.forEach((item, j) => {
     if (!item.download_url) {
       fail('no-download-url', '下载接口未返回直链，请重试');
     }
+    const target = pending[j];
+    if (!target) return; // 响应条数 > 请求条数（上游异常）：多余条目丢弃
     const result: DownloadResult = {
       url: item.download_url, // 签名 URL，原样透传，禁止任何加工
-      fileName: item.file_name,
-      size: item.size,
+      // v1.2.x 复用分家：直链绝对过期 ms（URL auth_key/Expires 参数解析），linkStatus 以此判定
+      expiresAt: ossUrlExpiryMs(item.download_url) ?? undefined,
       hash: item.md5, // 夸克 dl 响应给 md5（v1.1.9.final：字段通用化 hash，导出注释行校验下载完整性）
     };
     // 凭据只拼单 key（__puus / __pugs），绝不带登录整串 —— 导出文件可能被分享/上传，
@@ -322,8 +336,13 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
       result.cookieString = `__pugs=${pugs}`;
       result.cookie = { key: '__pugs', value: pugs };
     }
-    return result;
+    results[target.idx] = result;
   });
+  // 响应条数 < 请求条数（服务端异常/截断）→ 未回填项补失败，保持与输入顺序一致
+  for (const p of pending) {
+    if (!results[p.idx]) results[p.idx] = { url: '', error: '未返回直链，请重试' };
+  }
+  return results;
 }
 
 /** scanner 能力集合（registry.ts 组装成完整 PanAdapter） */

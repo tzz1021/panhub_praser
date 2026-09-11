@@ -36,11 +36,14 @@ import type {
   TokenResult,
 } from '../types';
 import { getActiveTransport, TransportError, type TransportResponse } from '../../core/transport/types';
+import { ossUrlExpiryMs } from '../../utils/linkStatus';
 import { getAlipanAuthString, parseAlipanAuthString, type AlipanAuth } from './auth';
 import {
   ALIPAN_DEFAULT_UA,
   API_BASE,
   CANARY_ADRIVE,
+  CANARY_SHARE,
+  COPY_ERROR_MESSAGES,
   CT_JSON,
   ERROR_MESSAGES,
   type AlipanBatchResponse,
@@ -60,13 +63,22 @@ export class AlipanApiError extends Error {
   }
 }
 
-/** 抛错误码对应文案；无映射时用 fallback 兜底（alipan 错误码多为字符串，见 types.ts TODO） */
+/** 抛错误码对应文案；无映射时用 fallback 兜底（alipan 错误码多为字符串，见 types.ts）。
+ * code 可能带 '.'（如 ForbiddenNoPermission.File），映射表键用 '_' 归一后二次查找。 */
 function fail(code: number | string, fallback?: string): never {
+  const key = typeof code === 'string' ? code.replace(/\./g, '_') : '';
   const message =
     typeof code === 'string'
-      ? ERROR_MESSAGES[code] ?? fallback ?? `阿里云盘接口错误（code: ${code}）`
+      ? ERROR_MESSAGES[code] ?? (key ? COPY_ERROR_MESSAGES[key] ?? ERROR_MESSAGES[key] : undefined) ?? fallback ?? `阿里云盘接口错误（code: ${code}）`
       : fallback ?? `阿里云盘接口错误（code: ${code}）`;
   throw new AlipanApiError(code, message);
+}
+
+/** 错误码 → 中文（与 fail 同一归一规则；不抛错，供逐文件失败项用） */
+function errorTextOf(code: number | string | undefined, fallback: string): string {
+  if (typeof code !== 'string' || !code) return fallback;
+  const key = code.replace(/\./g, '_');
+  return ERROR_MESSAGES[code] ?? COPY_ERROR_MESSAGES[key] ?? ERROR_MESSAGES[key] ?? fallback;
 }
 
 /** 200ms 节流 sleep（根包装层下钻的内部翻页用；treeWalker 正常翻页节流归 core） */
@@ -135,11 +147,8 @@ function toShareFile(item: AlipanShareItem): ShareFile {
     fileName: item.name ?? '',
     dir,
     size: item.size ?? 0,
-    // 关键适配说明：alipan 没有 share_fid_token 字段 —— 这里借该字段存分享内 file_id，
-    // 满足 core/linkFetcher「有令牌才发请求」的契约（linkFetcher 只做 truthy 判断）；
-    // 适配器 prase 时实际用的是 params.fids + share_id，fidsTokens 被忽略。
-    // TODO（开放问题）：更干净的做法是 core 契约不再要求文件令牌，等 Tzz 决策。
-    shareFidToken: dir ? undefined : item.file_id,
+    // v1.2.x 契约收窄后 alipan 不借 shareFidToken 存 file_id：core/linkFetcher 不再要求逐文件令牌，
+    // 文件标识统一用 fid = file_id（uc/quark 才需要 shareFidToken，缺它=解析失败）。
     // 格式展示：短扩展名（mp4/zip…）优先，其次 mime 全称
     formatType: item.mime_extension ?? item.file_extension ?? item.mime_type,
     // alipan 时间戳是 ISO 字符串，转 ms
@@ -229,11 +238,12 @@ async function list(params: ListParams): Promise<ListResult> {
 /**
  * 构造 prase 阶段的请求头（两跳共用）：
  * - content-type + Authorization（登录态，转存/取直链必需）
- * - user-agent：用户凭据串写了就用，否则默认 UA（"默认头只写 UA"，不默认加 x-device-id）
- * - x-device-id：仅当用户在凭据串里显式提供
- * - extra 按接口补：batch = x-share-token；get_download_url = x-canary（客户端段）
- * TODO（待验证 a/c）：UA/x-device-id/x-canary 在 batch 与 get_download_url 是否可省、
- * to_drive_id 是否必须显式 —— headtest.mjs 最小头矩阵未跑完（token 过期中断），当前按保守写上。
+ * - user-agent：用户凭据串写了就用，否则默认 UA（"默认头只写 UA 常量"，不默认加 x-device-id）
+ * - x-device-id：仅当用户在凭据串里显式提供（UA/device 非必需，实测）
+ * - extra 按接口补：batch = x-share-token + x-canary share 段（CANARY_SHARE）；
+ *   get_download_url = x-canary 客户端段（CANARY_ADRIVE，实测成功组合）
+ * 头部与传输层/代理白名单对齐：authorization / x-share-token / x-canary / x-device-id
+ * 均在 proxy.js forwardHeaders 放行列表内（见 functions/api/proxy.js 头注释）。
  */
 function praseHeaders(auth: AlipanAuth, extra: Record<string, string> = {}): Record<string, string> {
   const bearer = auth.auth.startsWith('Bearer ') ? auth.auth : `Bearer ${auth.auth}`;
@@ -246,36 +256,49 @@ function praseHeaders(auth: AlipanAuth, extra: Record<string, string> = {}): Rec
   return { ...headers, ...extra };
 }
 
-/** 第 3 步：批量获取下载直链（prase 两跳；每次调用 = 一批，节流归 linkFetcher） */
+/** 第 3 步：批量获取下载直链（prase 两跳；每次调用 = 一批，节流归 linkFetcher）
+ *
+ * v1.2.x 契约收窄：files 由调用方保证顺序（alipan 无 shareFidToken，fid = file_id）。
+ * 逐文件失败（copy 内层非 201 / 取直链异常）在**对应下标**产出 DownloadResult.error +
+ * errorCode（core linkFetcher 原样回填，不整批 throw）；仅凭据缺失/HTTP 层失败整批抛。
+ *
+ * 幂等决策（v1.2.x 拍板，勿改）：**不做幂等转存** —— X-signature 体系查不了 user 接口、
+ * copy 后新 file_id 无法与源文件跟踪绑定，auto_rename 副本累积接受（重复 prase/重试会
+ * 在目标目录留下「xxx(2)」副本，去重需服务端侧另案）。
+ */
 async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[]> {
-  if (params.fids.length === 0) {
+  if (params.files.length === 0) {
     return [];
   }
-  // 凭据唯一来源：用户凭据串（无游客通道）。缺 auth/目标目录 → 抛 need-login 哨兵码
-  // （31001 复用夸克哨兵约定：ResultPage 据此弹登录态填写窗，见交付摘要开放问题）
+  // 凭据唯一来源：用户凭据串（无游客通道）。缺 auth/drive_id/目标目录 → 抛 need-login 哨兵码
+  // （31001 复用夸克哨兵约定：ResultPage 据此弹登录态填写窗）
   const authString = getAlipanAuthString();
   const auth = parseAlipanAuthString(authString);
   if (!auth.auth) {
     fail(31001, '阿里云盘解析需要登录态：请填写 auth（Bearer token）。分享文件必须先转存到你的网盘才能取直链（游客不可解析）');
+  }
+  if (!auth.driveId) {
+    fail(31001, '阿里云盘解析需要账号 drive_id：请补 drive_id（自己账号的 drive_id，抓包与 auth 同源，见弹窗说明）');
   }
   if (!auth.toParentFileId) {
     fail(31001, '阿里云盘解析需要转存目标目录：请补 to_parent_file_id（你自己网盘里目标文件夹的 file_id）');
   }
 
   // ① 转存（一次 batch 数组批量；每个文件一个 /file/copy 请求，id 自编号、响应按序对应）
-  // TODO（开放问题 d/幂等）：copy 文件夹节点 = 单次 copy（file_id 可为文件夹），UI 目前只对
-  // file 节点 prase（与夸克一致）；重试会再次转存 → auto_rename 产生重复副本，去重方案待设计
+  // 头组合 = content-type + Authorization + x-share-token（源授权）+ x-canary share 段
+  // （v1.2.x 实测成功组合：batch 用 CANARY_SHARE = client=web,app=share,version=v2.3.1；
+  // UA/device 可省不写死；TODO 待验证：x-canary 是否可省 —— 与 repro.mjs 全链路保持一致）
   const batch = await request<AlipanBatchResponse>(
     '/adrive/v4/batch',
     {
-      requests: params.fids.map((fileId, i) => ({
+      requests: params.files.map((file, i) => ({
         body: {
-          file_id: fileId,
+          file_id: file.fid,
           share_id: params.shareId,
           auto_rename: true,
           to_parent_file_id: auth.toParentFileId,
-          // to_drive_id 是否必须显式未验证完（开放问题 b）—— 有则带，无则省略（服务端默认落自己盘）
-          ...(auth.driveId ? { to_drive_id: auth.driveId } : {}),
+          // v1.2.x 拍板：drive_id 列为必填（copy 显式 to_drive_id）；若实测可省再降级可选
+          to_drive_id: auth.driveId,
         },
         headers: { 'Content-Type': 'application/json' },
         id: String(i),
@@ -284,49 +307,59 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
       })),
       resource: 'file',
     },
-    // batch 头：content-type + x-share-token（源授权）+ Authorization（登录态）
-    // TODO（待验证 a）：x-canary/UA/device 是否可省未验证完 —— 需要时补 CANARY_ADRIVE
-    praseHeaders(auth, { 'x-share-token': params.stoken }),
+    praseHeaders(auth, { 'x-share-token': params.stoken, 'x-canary': CANARY_SHARE }),
     '转存到自己的网盘',
   );
   const responses = batch.responses ?? [];
   // 响应按 id 对应（id = 字符串序号）；异常时回退按数组序
   const byId = (i: number) => responses.find((r) => r.id === String(i)) ?? responses[i];
-  const copiedIds: string[] = [];
-  for (let i = 0; i < params.fids.length; i++) {
+
+  // ② 逐文件：copy 成功 → 对转存后的新 file_id 取直链（逐发，防风控）；
+  // copy 失败/取直链失败 → 该项产出失败结果（error + errorCode 透传），不阻断其余文件
+  const results: DownloadResult[] = [];
+  for (let i = 0; i < params.files.length; i++) {
     const inner = byId(i);
     const status = inner?.status;
     const fileId = inner?.body?.file_id;
     if (status !== 201 || !fileId) {
-      // 内层失败：body 带 alipan code/message；整批失败（与夸克批语义一致）
-      fail(
-        inner?.body?.code ?? (status ?? 'copy-failed'),
-        `第 ${i + 1} 个文件转存失败：${inner?.body?.message ?? `内层 status ${status ?? '未知'}`}`,
-      );
+      const code = inner?.body?.code ?? `copy-failed-${status ?? 'unknown'}`;
+      results.push({
+        url: '',
+        error: errorTextOf(code, `第 ${i + 1} 个文件转存失败：${inner?.body?.message ?? `内层 status ${status ?? '未知'}`}`),
+        errorCode: code,
+      });
+      continue;
     }
-    copiedIds.push(fileId);
-  }
-
-  // ② 对每个转存后的新 file_id 取直链（逐发，防风控）
-  // to_drive_id：优先用 copy 响应返回的 drive_id（实测即自己账号 drive_id，.repro.json 佐证），
-  // 其次用户显式填的；都无则省略（开放问题 b/c：自动获取端点未定）
-  const results: DownloadResult[] = [];
-  for (let i = 0; i < copiedIds.length; i++) {
-    const driveId = byId(i)?.body?.drive_id ?? auth.driveId;
-    const body: Record<string, string> = { file_id: copiedIds[i] };
-    if (driveId) body.drive_id = driveId;
-    const dl = await request<AlipanDownloadUrlResult>(
-      '/v2/file/get_download_url',
-      body,
-      // get_download_url 头：Authorization + x-canary 客户端段（契约必带值）
-      praseHeaders(auth, { 'x-canary': CANARY_ADRIVE }),
-      '获取下载直链',
-    );
+    // 取直链的 drive_id：优先 copy 响应返回的 drive_id（实测即自己账号 drive_id，.repro.json 佐证），
+    // 其次用户显式填的（凭据串 drive_id 字段）
+    const driveId = inner?.body?.drive_id ?? auth.driveId;
+    const body: Record<string, string> = { file_id: fileId, drive_id: driveId };
+    let dl: AlipanDownloadUrlResult;
+    try {
+      dl = await request<AlipanDownloadUrlResult>(
+        '/v2/file/get_download_url',
+        body,
+        // get_download_url 头：Authorization + x-canary 客户端段（client=windows,app=adrive,v6.0.0，实测成功）
+        praseHeaders(auth, { 'x-canary': CANARY_ADRIVE }),
+        '获取下载直链',
+      );
+    } catch (err) {
+      // 逐文件取直链失败（如 auth 过期 401 AccessTokenInvalid → 友好文案 + code 透传，UI 据此弹填写窗）
+      results.push({
+        url: '',
+        error: err instanceof Error ? err.message : `第 ${i + 1} 个文件获取直链失败，请重试`,
+        errorCode: err instanceof AlipanApiError ? err.code : 'download-url-failed',
+      });
+      continue;
+    }
     if (!dl?.url) {
-      fail('no-download-url', `第 ${i + 1} 个文件未返回直链，请重试`);
+      results.push({ url: '', error: `第 ${i + 1} 个文件未返回直链，请重试`, errorCode: 'no-download-url' });
+      continue;
     }
     // OSS 预签名 URL 原样透传；文件名/大小以目录树为准（本接口不返回）
-    results.push({ url: dl.url });
+    // v1.2.x 复用分家：expire_time（ISO 字符串）→ 绝对过期 ms；解析失败回退 URL Expires 参数
+    const expireMs = dl.expire_time ? Date.parse(dl.expire_time) || undefined : undefined;
+    results.push({ url: dl.url, expiresAt: expireMs ?? ossUrlExpiryMs(dl.url) ?? undefined });
   }
   return results;
 }

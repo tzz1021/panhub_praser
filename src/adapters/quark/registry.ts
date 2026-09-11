@@ -5,7 +5,7 @@
  * 顶部 src/adapters/registry.ts 从这里 import 注册。
  */
 import type { PanAdapter } from '../types';
-import { QUARK_LIMITS, QUARK_HIDDEN_VOLUMN_TEXT, QUARK_LOGIN_SIZE } from './types';
+import { QUARK_LIMITS, QUARK_HIDDEN_VOLUMN_TEXT, QUARK_LOGIN_SIZE, QUARK_DOWNLOAD_HEADERS } from './types';
 import { quarkScanner, buildHiddenVolumnUrl } from './scanner';
 import { detect, parseShareId } from './selector';
 import { buildJumpUrl, parseJumpUrl } from './jumper';
@@ -16,6 +16,8 @@ export const quarkAdapter: PanAdapter = {
   id: 'quark',
   name: '夸克网盘',
   limits: QUARK_LIMITS,
+  // v1.2.x：下载层静态头（导出/推送命令按文件注入）
+  downloadHeaders: QUARK_DOWNLOAD_HEADERS,
   // 下载层 __pugs：与 UC 同一机制（响应 Set-Cookie，代理 x-pugs 回传）
   cookie: {
     key: '__pugs',

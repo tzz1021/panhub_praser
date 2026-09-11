@@ -30,6 +30,16 @@ export const QUARK_LOGIN_SIZE = 50 * 1024 * 1024;
 export const QUARK_DL_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/3.20.0 Chrome/112.0.5615.165 Electron/24.1.3.8 Safari/537.36 Channel/pckk_other_ch';
 
+/**
+ * 下载层静态头（v1.2.x，与 *_LIMITS 并列声明）：导出/推送命令按文件注入。
+ * UA 复用 download 请求同款客户端 UA（夸克风控对客户端 UA 敏感，直链下载保持一致最稳）；
+ * Referer = 夸克分享页。动态凭据（__pugs/__puus 同响应绑定）不走这里。
+ */
+export const QUARK_DOWNLOAD_HEADERS = {
+  'User-Agent': QUARK_DL_UA,
+  Referer: 'https://pan.quark.cn/',
+} as const;
+
 /** 错误码 → 中文文案（与 UC 同源错误码体系，reverse-notes-quark.md §4） */
 export const ERROR_MESSAGES: Record<number, string> = {
   31001: '请先登录网盘（分享者或访问者要求）',

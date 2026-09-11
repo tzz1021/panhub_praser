@@ -109,8 +109,8 @@ export function DefaultMode({ prefs, onChange }: DefaultModeProps): JSX.Element 
       <div className="switch-row">
         <div>
           <div className="switch-label">资源复用窗口（小时）</div>
-          <div className="switch-sub">0 = 不复用；窗口内再进同一分享复用缓存目录树，已解析直链（oss+sig）不再重复请求</div>
-          <div className="switch-sub">建议按你常用云服务里直链过期时间最短的来设（UC 实测 3-6h），窗口超过直链实际有效期等于白设</div>
+          <div className="switch-sub">0 = 不复用；窗口内再进同一分享复用缓存目录树（scan 快照）</div>
+          <div className="switch-sub">v1.2.x：已解析直链不再按本窗口判定，改按上游过期时间（UC/夸克 Expires/auth_key、阿里 expire_time）自动复用/过期，无需再跟着直链有效期调</div>
         </div>
         <input
           className="input"

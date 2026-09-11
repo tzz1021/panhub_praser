@@ -2,9 +2,16 @@
  * 批量直链获取（docs/STRUCTURE.md：src/core/linkFetcher.ts）
  *
  * 节流参考 LinkSwift：15 个/批 + 批间 1s，防网盘风控。
- * 职责：按输入顺序把 ShareFile[] 分批调用 adapter.getDownloadLinks，
+ * 职责：纯编排 —— 按输入顺序把 ShareFile[] 分批调用 adapter.getDownloadLinks，
  * 每个输入文件产出一条 LinkResult，顺序与输入一致。
- * 缺 shareFidToken 的文件直接标记失败（不进请求）；单批失败默认继续下一批。
+ *
+ * v1.2.x 契约收窄（裁决权下沉，不加新逻辑层）：
+ * - 不再自己拼 fids/fidsTokens、不再预判「shareFidToken 缺失即拒绝」——
+ *   shareFidToken 是 UC/夸克专属逐文件令牌，阿里没有（契约注释已标明 core 不得依赖）；
+ * - 适配器从 files 自行读取所需字段构造请求（uc/quark=download、alipan=copy→取直链两跳），
+ *   缺 per-file 令牌/不支持的项（如目录）由适配器在对应下标产出失败（DownloadResult.error）；
+ * - 本层只负责：分批 → 调用 → 按输入顺序回填（缺项补失败）→ 单批异常整批失败语义
+ *   （continueOnError=false 中止后续批次）。
  */
 import type { ShareFile } from '../adapters/types';
 import type { LinkFetchContext, LinkFetchOptions, LinkResult } from './types';
@@ -17,7 +24,7 @@ function sleep(ms: number): Promise<void> {
 /**
  * 批量获取直链。
  * @param ctx     直链获取上下文（adapter/shareId/stoken，见 core/types.ts）
- * @param files   待获取的文件列表（应只传文件，传目录也会因缺令牌被安全拒掉）
+ * @param files   待获取的文件列表（应只传文件；目录等不支持项由适配器兜底拒绝）
  * @param options 节流与容错配置（batchSize/batchIntervalMs/continueOnError）
  * @returns 与输入 files 一一对应的 LinkResult[]（顺序一致）
  */
@@ -30,71 +37,69 @@ export async function fetchLinks(
   const batchIntervalMs = Math.max(0, options?.batchIntervalMs ?? 1000);
   const continueOnError = options?.continueOnError ?? true;
 
-  // 预填结果：缺 shareFidToken 的文件直接失败，不进请求（目录同样走此规则）
-  const results: LinkResult[] = files.map((file) =>
-    file.shareFidToken
-      ? { file, url: '', ok: true }
-      : { file, url: '', ok: false, error: '文件令牌缺失，请重新解析' },
-  );
-
-  // 需要发请求的文件下标（保持输入顺序）
-  const pending: number[] = [];
-  files.forEach((file, i) => {
-    if (file.shareFidToken) {
-      pending.push(i);
-    }
-  });
+  // 占位结果（整批覆盖；仅 continueOnError=false 中止时后续条目保留中止文案）
+  const results: LinkResult[] = files.map((file) => ({
+    file,
+    url: '',
+    ok: false,
+    error: '因前序批次失败已中止，未获取直链',
+  }));
 
   // 按输入顺序分批
-  for (let start = 0; start < pending.length; start += batchSize) {
-    const indices = pending.slice(start, start + batchSize);
-    const batch = indices.map((i) => files[i]);
-    const fids = batch.map((f) => f.fid);
-    // 已按 shareFidToken 过滤，这里必然存在
-    const fidsTokens = batch.map((f) => f.shareFidToken as string);
-
+  for (let start = 0; start < files.length; start += batchSize) {
+    const batch = files.slice(start, start + batchSize);
     try {
+      // 适配器自行从 files 读取 fid/shareFidToken（uc/quark）或 file_id（alipan）
       const urls = await ctx.adapter.getDownloadLinks({
+        files: batch,
         shareId: ctx.shareId,
         stoken: ctx.stoken,
-        fids,
-        fidsTokens,
         guestMode: ctx.guestMode, // v1.1.9.final：qk-guestTurn 游客模式透传
       });
-      // 适配器返回与请求顺序一致（接口契约）；逐一回填，数量不足时补失败项
-      indices.forEach((idx, j) => {
+      // 适配器返回与输入顺序一致（接口契约）；逐一回填，数量不足时补失败项
+      for (let j = 0; j < batch.length; j++) {
         const item = urls[j];
+        const idx = start + j;
         if (item?.url) {
-          results[idx] = { file: files[idx], url: item.url, ok: true, cookie: item.cookie, hash: item.hash };
+          results[idx] = {
+            file: files[idx],
+            url: item.url,
+            ok: true,
+            cookie: item.cookie,
+            cookieString: item.cookieString,
+            hash: item.hash,
+            expiresAt: item.expiresAt, // v1.2.x：直链绝对过期 ms（复用判定用）
+          };
+        } else if (item?.error) {
+          // 适配器逐项失败（缺令牌/转存失败/取直链失败…）：文案 + 业务码透传
+          results[idx] = {
+            file: files[idx],
+            url: '',
+            ok: false,
+            error: item.error,
+            errorCode: item.errorCode,
+          };
         } else {
           results[idx] = { file: files[idx], url: '', ok: false, error: '未返回直链，请重试' };
         }
-      });
+      }
     } catch (err) {
       // 单批失败：整批标记失败；continueOnError=false 时中止剩余批次
       const message = err instanceof Error ? err.message : String(err);
       // 业务错误码透传（duck-typing：适配器错误对象带 code 字段即可；core 零网盘依赖）
       const errorCode = (err as { code?: number | string } | null | undefined)?.code;
-      indices.forEach((idx) => {
+      for (let k = 0; k < batch.length; k++) {
+        const idx = start + k;
         results[idx] = { file: files[idx], url: '', ok: false, error: message, errorCode };
-      });
+      }
       if (!continueOnError) {
-        // 中止后剩余文件也标记失败，避免 ok:true + 空 url 的脏数据
-        for (let k = start + batchSize; k < pending.length; k++) {
-          const idx = pending[k];
-          results[idx] = {
-            file: files[idx],
-            url: '',
-            ok: false,
-            error: '因前序批次失败已中止，未获取直链',
-          };
-        }
+        // 中止：剩余未处理条目保持「已中止」文案（占位结果即该文案）
         break;
       }
     }
 
     // 批间节流（最后一批不必再等）
-    if (start + batchSize < pending.length) {
+    if (start + batchSize < files.length) {
       await sleep(batchIntervalMs);
     }
   }

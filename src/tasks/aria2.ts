@@ -62,13 +62,34 @@ function cookieHeaderArray(f: ExportFile): string[] {
   return c ? [`Cookie: ${c}`] : [];
 }
 
+/** 静态下载头（v1.2.x，ExportFile.headers = adapter.downloadHeaders）→ HTTP 头字符串数组
+ * （供 RPC header 数组 / input-file header= 行用；Cookie 动态凭据不入内，走 cookieOf） */
+function staticHeaderArray(f: ExportFile): string[] {
+  return Object.entries(f.headers ?? {})
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}: ${v}`);
+}
+
+/** 静态下载头 → 命令行片段：User-Agent→--user-agent、Referer→--referer、其余→--header="name: value" */
+function staticHeaderFlags(f: ExportFile): string {
+  return Object.entries(f.headers ?? {})
+    .filter(([, v]) => v)
+    .map(([k, v]) => {
+      const key = k.toLowerCase();
+      if (key === 'user-agent') return ` --user-agent="${v}"`;
+      if (key === 'referer') return ` --referer="${v}"`;
+      return ` --header="${k}: ${v}"`;
+    })
+    .join('');
+}
+
 /**
  * 生成 aria2 命令行（v1.1.5.2：keepStructure 也输出单文件，每行一条完整命令）。
  *
  * 不保留结构：每文件一行
- *   aria2c --continue=true [--header="Cookie: __pugs=..."] --dir="<outDir>" --out="<文件名>" "<url>"
+ *   aria2c --continue=true [--header="Cookie: __pugs=..."] [--user-agent/--referer 静态头] --dir="<outDir>" --out="<文件名>" "<url>"
  * 保留结构：每文件一行带相对目录（aria2 自动创建 --dir 目录）
- *   aria2c --continue=true [--header="Cookie: __pugs=..."] --dir="dir1/sub" --out="a.zip" "<url>"
+ *   aria2c --continue=true [--header="Cookie: __pugs=..."] [静态头] --dir="dir1/sub" --out="a.zip" "<url>"
  */
 export function generateAria2Command(files: ExportFile[], options: TaskOptions): string {
   const keep = options.keepStructure;
@@ -84,7 +105,7 @@ export function generateAria2Command(files: ExportFile[], options: TaskOptions):
       const hashLine = f.hash ? `\n# hash: ${f.hash}` : '';
       // v1.1.9.final：aria2 额外参数（设置 → 高级功能；原样拼进 --out 之后、URL 之前）
       const extra = options.aria2Extra ? ` ${options.aria2Extra.trim()}` : '';
-      return `aria2c --continue=true${cookieHeader(f)}${dirFlag} --out="${shellEscape(fileNameOf(f.path))}"${extra} "${f.url}"${hashLine}`;
+      return `aria2c --continue=true${cookieHeader(f)}${staticHeaderFlags(f)}${dirFlag} --out="${shellEscape(fileNameOf(f.path))}"${extra} "${f.url}"${hashLine}`;
     })
     .join('\n');
 }
@@ -107,6 +128,8 @@ export function generateAria2InputFile(files: ExportFile[]): string {
     lines.push(f.url); // input-file 不走 shell，直链原样
     const h = cookieHeaderLine(f);
     if (h) lines.push(h); // §12：每文件各自的 __pugs 令牌
+    // v1.2.x：静态下载头同样以 header= 行注入（UA/Referer 等；每头一行）
+    for (const s of staticHeaderArray(f)) lines.push(`  header=${s}`);
     const dir = dirNameOf(f.path);
     if (dir) lines.push(`  dir=${dir}`);
     lines.push(`  out=${fileNameOf(f.path)}`);
@@ -137,7 +160,7 @@ export function buildAria2AddUriParams(files: ExportFile[], options: TaskOptions
     } else {
       dir = baseDir || '.';
     }
-    return [[f.url], { dir, out, header: cookieHeaderArray(f) }];
+    return [[f.url], { dir, out, header: [...staticHeaderArray(f), ...cookieHeaderArray(f)] }];
   });
 }
 

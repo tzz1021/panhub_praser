@@ -36,6 +36,12 @@ export interface PraseSnapshot {
   fetchedAt: number;
   /** 与该直链同响应绑定的下载凭据（§12；UC = __pugs） */
   cookie?: { key: string; value: string };
+  /** 完整 Cookie 头值（多凭据时优先于 cookie；夸克登录态 + __pugs 整串） */
+  cookieString?: string;
+  /** 文件校验 hash（夸克 = md5；导出注释行用） */
+  hash?: string;
+  /** v1.2.x 直链绝对过期 ms（上游 Expires/expire_time；跨刷新复用判定主依据） */
+  expiresAt?: number;
   /** 手动终止标记（cookie 弹窗选「算了吧」） */
   terminatedAt?: number;
 }
@@ -45,7 +51,7 @@ export function praseKey(shareId: string, fid: string): string {
   return `${shareId}::${fid}`;
 }
 
-/** 内存 LinkEntry → 落库快照 */
+/** 内存 LinkEntry → 落库快照（v1.2.x：cookieString/hash/expiresAt 一并落，跨刷新完整恢复） */
 function toSnapshot(shareId: string, fid: string, entry: LinkEntry): PraseSnapshot {
   return {
     key: praseKey(shareId, fid),
@@ -56,6 +62,9 @@ function toSnapshot(shareId: string, fid: string, entry: LinkEntry): PraseSnapsh
     error: entry.error,
     fetchedAt: entry.fetchedAt,
     cookie: entry.cookie,
+    cookieString: entry.cookieString,
+    hash: entry.hash,
+    expiresAt: entry.expiresAt,
     terminatedAt: entry.terminatedAt,
   };
 }
@@ -68,6 +77,9 @@ function toEntry(s: PraseSnapshot): LinkEntry {
     error: s.error,
     fetchedAt: s.fetchedAt,
     cookie: s.cookie,
+    cookieString: s.cookieString,
+    hash: s.hash,
+    expiresAt: s.expiresAt,
     terminatedAt: s.terminatedAt,
   };
 }

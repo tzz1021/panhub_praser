@@ -12,7 +12,7 @@
  * - 无 sizeThreshold：没有「小文件游客可用」分级，登录态是全部文件的硬前提
  */
 import type { PanAdapter } from '../types';
-import { ALIPAN_LIMITS } from './types';
+import { ALIPAN_LIMITS, ALIPAN_DOWNLOAD_HEADERS } from './types';
 import { alipanScanner } from './scanner';
 import { detect, parseShareId } from './selector';
 import { buildJumpUrl, parseJumpUrl } from './jumper';
@@ -23,7 +23,9 @@ export const alipanAdapter: PanAdapter = {
   id: 'alipan',
   name: '阿里云盘',
   limits: ALIPAN_LIMITS,
-  // 登录态凭据串输入规格（v1.2.x alipan：Bearer token + 转存目标目录，非浏览器 cookie）
+  // v1.2.x：下载层静态头（导出/推送命令按文件注入；精确 Referer，签名 x-oss-additional-headers 绑定）
+  downloadHeaders: ALIPAN_DOWNLOAD_HEADERS,
+  // 登录态凭据串输入规格（v1.2.x alipan：Bearer token + 账号 drive_id + 转存目标目录，非浏览器 cookie）
   cookieInput: {
     wholeString: true,
     // 整串解析/校验用的关键键（k=v; k2=v2 格式，与夸克整串同风格）
@@ -33,16 +35,16 @@ export const alipanAdapter: PanAdapter = {
     save: setAlipanAuthString,
     // 顶部说明行（覆盖默认“需要 cookie 鉴权…”文案）
     intro:
-      '需要鉴权：阿里云盘不支持游客解析，分享文件必须先转存到你的网盘才能取直链。请按下方格式填写登录态凭据（保存后自动重试）：',
+      '需要鉴权：阿里云盘不支持游客解析，分享文件必须先转存到你的网盘才能取直链。auth 有效期约 2 小时。请按下方格式填写登录态凭据（保存后自动重试）：',
     // 大输入框 placeholder（整串示例 + 取指说明）
     wholeStringPlaceholder:
-      '粘贴完整凭据串，格式：\nauth=Bearer <登录token>;to_parent_file_id=<转存目标目录 file_id>;user-agent=<可选>;x-device-id=<可选>\n\ntoken 获取：浏览器登录 alipan.com/drive → F12 → Network → 任意请求的 Authorization 头（Bearer 开头的整段）。\nto_parent_file_id：你自己网盘目标文件夹的 file_id（打开该文件夹后地址栏 /drive/file/all/<id> 的 <id>）。',
+      '粘贴完整凭据串，格式：\nauth=Bearer <登录token>;drive_id=<自己账号 drive_id>;to_parent_file_id=<转存目标目录 file_id>;user-agent=<可选>;x-device-id=<可选>\n\ntoken 获取：浏览器登录 alipan.com/drive → F12 → Network → 任意请求的 Authorization 头（Bearer 开头整段）。\ndrive_id：同一份 F12 抓包里 /adrive/v2/... 请求响应体或请求负载里的 drive_id（长数字串）。\nto_parent_file_id：自己网盘目标文件夹的 file_id（打开后浏览器最上面 /drive/file/all/<id> 的 <id>）。\nuser-agent 值含分号（如 Linux 的 (X11; Linux …)）可原样粘贴，解析器会自动还原。',
     // 凭据不是浏览器 cookie → 隐藏 get cookies.txt 插件推荐与懒人导入行
     browserCookie: false,
     notice:
-      '凭据串含你的阿里云盘登录态（Bearer token 可把分享文件转存进你的网盘），若在公用代理上使用请自担账号安全风险（凭据只存本浏览器 localStorage）',
+      '凭据串含你的阿里云盘登录态（Bearer token 会把分享文件转存进你的网盘并取直链），若在公用代理上使用请自担账号安全风险',
     missingHint:
-      '解析失败常见原因：auth 过期（回 alipan.com 重新复制）或 to_parent_file_id 不是你自己网盘的目录 file_id。仍失败请查看解析日志',
+      '解析失败常见原因：auth 过期（≈2h）或 drive_id/to_parent_file_id 不是你自己账号的。仍失败请查看解析日志',
   },
   detect,
   parseShareId,

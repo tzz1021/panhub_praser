@@ -44,6 +44,19 @@ export const UC_LIMITS = {
   etagNote: '不支持',
 } as const;
 
+/**
+ * 下载层静态头（v1.2.x，与 *_LIMITS 并列声明）：导出/推送命令按文件注入。
+ * UA 原值从旧 src/tasks/curl.ts 迁来（reverse-notes-uc.md §5 实测组合，字符串保持不变）；
+ * Referer = UC 分享页。动态凭据（__pugs 同响应绑定）不走这里。
+ */
+export const UC_DOWNLOAD_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+    'uc-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 ' +
+    'Channel/pckk_other_ch',
+  Referer: 'https://drive.uc.cn/',
+} as const;
+
 /** detail 接口 list[] 原始元素（字段名来自真实抓包 uc_detail_sample.json） */
 export interface UcDetailItem {
   fid: string;

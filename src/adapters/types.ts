@@ -25,7 +25,11 @@ export interface ShareFile {
   dir: boolean;
   /** 大小（字节）；目录为 0 */
   size: number;
-  /** 分享文件令牌（文件必带，下载用；目录无） */
+  /**
+   * UC/夸克专属可选字段（分享文件令牌，下载用；目录无）。
+   * v1.2.x 契约收窄：core 不得依赖本字段 —— 是否必需由各适配器自行判定
+   * （uc/quark 缺它=该文件解析失败；alipan 无此字段，文件标识统一用 fid=file_id）。
+   */
   shareFidToken?: string;
   /** 格式（application/zip 等） */
   formatType?: string;
@@ -80,14 +84,20 @@ export interface ListResult {
   nextMarker?: string;
 }
 
-/** 批量取直链参数（UC：POST file/download?entry=ft&fr=pc&pr=UCBrowser） */
+/**
+ * 批量取直链参数（v1.2.x 契约收窄：只传 files + 会话上下文，不再传 fids/fidsTokens）。
+ *
+ * 裁决权下沉：本层不预判 per-file 令牌（shareFidToken 是 UC/夸克专属，阿里没有）——
+ * 适配器从 files 里自行读取 fid / shareFidToken 构造自己的请求：
+ * uc=sharepage/download（fids+fids_token）、quark=同 UC 系、alipan=copy→get_download_url 两跳。
+ * 缺 per-file 令牌 / 不支持的文件（如目录）由适配器在对应下标产出失败项
+ * （DownloadResult.error + errorCode，core linkFetcher 原样回填）。
+ */
 export interface DownloadParams {
+  /** 本批待解析的文件（顺序即回填顺序；调用方保证只传文件，目录由适配器兜底拒绝） */
+  files: ShareFile[];
   shareId: ShareId;
   stoken: Stoken;
-  /** 文件 ID 列表 */
-  fids: string[];
-  /** 与 fids 一一对应的分享文件令牌 */
-  fidsTokens: string[];
   /**
    * v1.1.9.final：游客模式（qk-guestTurn）—— 适配器不注入登录态整串，
    * 改用游客 __pugs 发起请求（夸克 <50MB 小文件；其他网盘忽略）。
@@ -117,6 +127,19 @@ export interface DownloadResult {
    * + 同响应 __pugs 拼成的整串；任务生成器原样注入 `Cookie: <值>`。
    */
   cookieString?: string;
+  /**
+   * 失败原因（url 为空时给出中文文案；适配器对缺 per-file 令牌等单项问题
+   * 在此产出失败，core linkFetcher 透传到 LinkResult）。
+   */
+  error?: string;
+  /** 失败时的供应商业务错误码（uc/quark 数字码 / alipan 字符串码；透传给 core 展示用） */
+  errorCode?: number | string;
+  /**
+   * 直链绝对过期时间 ms（v1.2.x 复用分家）：uc/quark 从直链 URL 的
+   * Expires/auth_key 参数解析，alipan 取 get_download_url 响应 expire_time。
+   * core/linkStatus 以此为主做直链复用判定（偏好窗口不再参与直链判定）。
+   */
+  expiresAt?: number;
 }
 
 /**
@@ -216,6 +239,13 @@ export interface PanAdapter {
   readonly name: string;
   /** 网盘特性表 */
   readonly limits: PanLimits;
+  /**
+   * 下载层静态头（v1.2.x）：导出/推送命令按文件注入（ExportFile.headers）。
+   * 各网盘在 types.ts 与 *_LIMITS 并列声明（如 uc: 客户端 UA + drive.uc.cn Referer；
+   * alipan: 精确 Referer https://www.alipan.com/，签名 x-oss-additional-headers 绑定）。
+   * 动态凭据（每文件 cookie/cookieString 同响应绑定）不进这里，走 DownloadResult。
+   */
+  readonly downloadHeaders: Record<string, string>;
   /** 该网盘是否识别此分享链接 */
   detect(url: string): boolean;
   /** 下载层 cookie 规格（UC 需要 __pugs；无 = 不需要 cookie） */

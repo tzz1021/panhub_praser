@@ -39,7 +39,7 @@ import { CookieInputModal } from '../components/CookieInputModal';
 import { exportTask, exportTreeMd } from '../tasks/export';
 import { DOWNLOADER_PRESETS, loadDownloaderConfig, pushFilesToDownloader } from '../utils/downloader';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
-import { getExpiry, isLinkGreen, isLinkUsable, isLinkYellow, linkDetailOf } from '../utils/linkStatus';
+import { entryExpiryMs, isLinkGreen, isLinkUsable, isLinkYellow, linkDetailOf } from '../utils/linkStatus';
 import type { ExportFile, LinkEntry, LinkResult, ParseSession, TaskKind, TreeNode } from '../core/types';
 import { linkAbbr } from './HomePage';
 
@@ -300,7 +300,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     setChecked((prev) => {
       const next = new Set(prev);
       for (const f of visibleLeaves) {
-        const detail = linkDetailOf(links?.get(f.fid), prefs.reuseWindowHours, f.size);
+        const detail = linkDetailOf(links?.get(f.fid), f.size);
         const match =
           kind === 'green'
             ? detail.kind === 'green'
@@ -334,7 +334,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     if (fetching) return;
     pendingFetch.current = files;
     addGlobalLog('=====解析下载方式（prase）=====');
-    addGlobalLog(`prase：选中 ${files.length} 个文件（窗口 ${prefs.reuseWindowHours}h 内已解析直链自动复用）`);
+    // v1.2.x 复用分家：直链复用按上游过期时间判定（linkStatus），不再看 reuseWindowHours
+    addGlobalLog(`prase：选中 ${files.length} 个文件（缓存直链未过期自动复用，其余请求接口）`);
     // 全部命中缓存直链 → 无需 cookie，直接走复用合并
     if (files.every((f) => isReusable(f.fid))) {
       addGlobalLog('prase：全部命中缓存直链，跳过 cookie 弹窗');
@@ -379,7 +380,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
    */
   const isReusable = (fid: string): boolean => {
     const f = leafNodeOf(fid)?.file;
-    return isLinkUsable(links?.get(fid), prefs.reuseWindowHours, f?.size);
+    return isLinkUsable(links?.get(fid), f?.size);
   };
 
   /** 真正执行 prase（每个下载响应下发的 __pugs 与该响应的直链绑定，§12）
@@ -399,7 +400,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
         }
       }
       if (reused.size > 0) {
-        addGlobalLog(`prase：复用缓存直链 ${reused.size}/${files.length}（窗口内 oss+sig 未过期，不再请求接口）`);
+        addGlobalLog(`prase：复用缓存直链 ${reused.size}/${files.length}（按上游过期时间判定未过期，不再请求接口）`);
       }
       // ② 新文件走接口（15/批 + 1s 节流）
       let results: LinkResult[] = [];
@@ -429,6 +430,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           cookie: r.cookie, // §12：与该直链同响应的 __pugs
           cookieString: r.cookieString, // v1.1.9：多凭据整串（夸克登录态 + __pugs）
           hash: r.hash, // v1.1.9.final：文件校验 hash（夸克 = md5），导出注释行校验下载完整性
+          expiresAt: r.expiresAt, // v1.2.x：直链绝对过期 ms（上游 Expires/expire_time），复用判定主依据
         });
       });
       setLinks((prev) => new Map([...(prev ?? []), ...map]));
@@ -437,11 +439,12 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
       if (prefs.footprint.keepLogs) {
         await savePraseEntries(shareId, map).catch(() => undefined);
       }
-      // v1.1.9：夸克强制登录（23018 超限 / 31001 需登录）→ 弹登录态 cookie 填写窗，保存后自动重试
+      // v1.1.9：夸克强制登录（23018 超限 / 31001 需登录）→ 弹登录态 cookie 填写窗，保存后自动重试；
+      // v1.2.x alipan：缺凭据/过期同样是 31001 哨兵码或 AccessTokenInvalid 串码（auth≈2h 过期常见）
       if (cookieInputReq) {
         const needLogin = toFetch.filter((_, i) => {
           const r = results[i];
-          return !r.ok && (r.errorCode === 23018 || r.errorCode === 31001);
+          return !r.ok && (r.errorCode === 23018 || r.errorCode === 31001 || r.errorCode === 'AccessTokenInvalid' || r.errorCode === 'AccessTokenExpired');
         });
         if (needLogin.length > 0 && prefs.modals.cookieInput) {
           addGlobalLog(`prase：${needLogin.length} 个文件需要登录态 cookie（${cookieInputReq.keys.map((k) => k.key).join('/')}），弹出填写窗`);
@@ -468,8 +471,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           const cred = entry?.cookie ? `${entry.cookie.key} 有(${entry.cookie.value.length}字符)` : `${adapter.cookie?.key ?? 'cookie'} 无`;
           if (!entry?.ok) return `${path} · ${size}${type} · 失败${entry?.error ? `（${entry.error}）` : ''}`;
           const remain = (() => {
-            const exp = getExpiry(entry.url);
-            if (exp === null) return '无Expires'; // 罕见：oss 未带过期参数
+            const exp = entryExpiryMs(entry);
+            if (exp === null) return '无过期时间'; // 罕见：直链 URL 无签名过期参数且适配器未填充
             return exp <= Date.now() ? '已过期' : `剩${formatRemain(exp - Date.now())}`;
           })();
           // v1.1.5.3：附直链 URL（分析用），折叠块可一键复制
@@ -536,7 +539,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     // v1.1.5.2：不可用直链（无/失败/过期）算失败项，可一键重试；绿色/黄色不重试
     const failed = selectedFiles.filter((f) => {
       const l = links?.get(f.fid);
-      return !isLinkUsable(l, prefs.reuseWindowHours, f.size);
+      return !isLinkUsable(l, f.size);
     });
     requestFetchLinks(failed);
   };
@@ -627,7 +630,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
         toast('该文件已解析，勾选后可导出下载命令', 'info');
         return;
       }
-      addGlobalLog(`prase：${node.file.fileName} 缓存直链已过期（窗口 ${prefs.reuseWindowHours}h），重新请求接口`);
+      addGlobalLog(`prase：${node.file.fileName} 缓存直链已过期（上游过期时间已到），重新请求接口`);
     }
     // v1.1.5.2 兜底：手动终止后重试单文件 + pages.dev 代理 —— 与上次终止同分同秒 = 高频循环，强制提示
     // v1.1.5.3：同分秒判定太苛刻（真实点击必然跨秒导致 modal 不出现），改为「终止后 5s 内重试」窗口
@@ -721,24 +724,31 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
 
   /* ---------- 导出（浏览器直连/复制直链已移除：UC referer 白名单拒绝第三方源，§10.1.4） ---------- */
   const buildExportFiles = (): ExportFile[] => {
-    // v1.1.5：curl 也支持保留目录结构（--create-dirs）；仅导出可用的直链（绿+黄，窗口内未过期）
+    // v1.1.5：curl 也支持保留目录结构（--create-dirs）；仅导出可用的直链（绿+黄，上游过期时间内）
     const keep = keepStructure;
     return selectedFiles
-      .filter((f) => isLinkUsable(links?.get(f.fid), prefs.reuseWindowHours, f.size))
+      .filter((f) => isLinkUsable(links?.get(f.fid), f.size))
       .map((f) => {
         const node = leafNodeOf(f.fid);
         const path = node?.path ?? f.fileName;
         const entry = links!.get(f.fid)!;
         // v1.2.2 fix（09-02）：缺凭据提示按网盘/大小标注 —— 夸克大文件 OSS 校验是 __puus，
         // 小文件与 UC 同机制是 __pugs；此前导出命令硬编码 UC __pugs，夸克文件误报且不精准。
+        // v1.2.x：alipan 无下载层 cookie（直链 = OSS 签名 + 固定 Referer）→ credLabel 为空，
+        // 任务生成器只在 credLabel 存在且缺 cookie 时才写提示注释。
         const credLabel =
           adapter.id === 'quark'
             ? `quark ${(f.size ?? 0) >= QUARK_LOGIN_SIZE ? '__puus' : '__pugs'}`
-            : 'UC __pugs';
+            : adapter.id === 'uc'
+              ? 'UC __pugs'
+              : undefined;
         return {
           path: keep ? path : path.split('/').pop() ?? f.fileName,
           url: entry.url,
           size: f.size,
+          // v1.2.x 下载层静态头：本会话适配器声明值合并进每文件（curl -A/-e、aria2 --user-agent/--referer、
+          // gopeed extra.header 由任务生成器映射）；cookie/cookieString 动态凭据逻辑不受影响
+          headers: adapter.downloadHeaders,
           cookie: entry.cookie, // §12：每文件与其直链同响应的 __pugs，merger 按文件注入
           cookieString: entry.cookieString, // v1.1.9：多凭据整串（夸克登录态 + __pugs）
           hash: entry.hash, // v1.1.9.final：文件校验 hash（夸克 = md5），导出注释行校验下载完整性
@@ -786,7 +796,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     // v1.1.5.2：导出的直链里有黄色（有效但剩余时间不够完整下载）→ 提醒用户
     // v1.1.7：设置 → 弹窗开关 exportYellowWarn：开=弹窗，关=简略 toast（话术不变）
     const exportedWithFid = files.filter((f) => f.fid !== undefined);
-    const yellowFiles = exportedWithFid.filter((f) => isLinkYellow(links?.get(f.fid as string), prefs.reuseWindowHours, f.size));
+    const yellowFiles = exportedWithFid.filter((f) => isLinkYellow(links?.get(f.fid as string), f.size));
     if (yellowFiles.length > 0) {
       addGlobalLog(`task：${yellowFiles.length}/${exportedWithFid.length} 个直链剩余有效期不足以支撑完整下载（黄色状态），已提示用户`);
       if (prefs.modals.exportYellowWarn) {
@@ -850,8 +860,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
 
   /* ---------- 渲染 ---------- */
   // v1.1.5.2：仅统计可用直链（绿+黄）；选中含绿色文件时批量解析按钮置灰（防重复刷 prase）
-  const linkedOkCount = links ? selectedFiles.filter((f) => isLinkUsable(links.get(f.fid), prefs.reuseWindowHours, f.size)).length : 0;
-  const hasGreenSelected = selectedFiles.some((f) => isLinkGreen(links?.get(f.fid), prefs.reuseWindowHours, f.size));
+  const linkedOkCount = links ? selectedFiles.filter((f) => isLinkUsable(links.get(f.fid), f.size)).length : 0;
+  const hasGreenSelected = selectedFiles.some((f) => isLinkGreen(links?.get(f.fid), f.size));
 
   return (
     <>
@@ -979,7 +989,6 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
             expanded={expanded}
             checked={checked}
             links={links ?? new Map()}
-            reuseWindowHours={prefs.reuseWindowHours}
             onToggleDir={(fid) =>
               setExpanded((prev) => {
                 const next = new Set(prev);

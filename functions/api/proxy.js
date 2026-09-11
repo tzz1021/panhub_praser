@@ -151,18 +151,22 @@ function forwardHeaders(headers) {
 
 /* ============ v1.2.2 云端分支：取号 + D1 trace（本地无 env 时全部不触发，零行为变化） ============ */
 
-/** URL 特征 → 操作分类（scan | prase | other；与 backend/src/proxy.js classifyOperation 同一语义，最小复制） */
+/** URL 特征 → 操作分类（scan | prase | other；与 backend/src/proxy.js classifyOperation 同一语义，最小复制）
+ * v1.2.x alipan：scan = share_token/get_by_share/list_by_share（匿名）；prase = batch 转存 + get_download_url */
 function classifyOperation(url) {
-  if (/sharepage\/(token|detail)/.test(url)) return 'scan';
-  if (/file\/download/.test(url)) return 'prase';
+  if (/sharepage\/(token|detail)/.test(url)) return 'scan'; // uc/quark
+  if (/\/v2\/share_link\/get_share_token|\/adrive\/v2\/file\/get_by_share|\/adrive\/v2\/file\/list_by_share/.test(url)) return 'scan'; // alipan
+  if (/file\/download/.test(url)) return 'prase'; // uc/quark
+  if (/\/adrive\/v4\/batch|\/v2\/file\/get_download_url/.test(url)) return 'prase'; // alipan
   return 'other';
 }
 
-/** host → pan（云端无 hosts 表，内置 uc/quark 后缀判定；与 backend panOfHostname 同一语义，最小复制） */
+/** host → pan（云端无 hosts 表，内置 uc/quark/alipan 后缀判定；与 backend panOfHostname 同一语义，最小复制） */
 function panOfHostname(hostname) {
   const h = String(hostname ?? '').toLowerCase();
   if (h.endsWith('uc.cn')) return 'uc';
   if (h.endsWith('quark.cn')) return 'quark';
+  if (h.endsWith('aliyundrive.com') || h.endsWith('alipan.com')) return 'alipan';
   return null;
 }
 
@@ -438,14 +442,16 @@ export async function onRequestPost(context) {
   const pan = panOfHostname(target.hostname);
   const operation = classifyOperation(target.href);
 
-  // v1.2.2 云端取号（仅 env.BACKEND_URL 存在 + pan + operation==='prase'；scan 保持游客，与本地 hop 语义一致）：
+  // v1.2.2 云端取号（仅 env.BACKEND_URL 存在 + uc/quark + operation==='prase'；scan 保持游客，与本地 hop 语义一致）：
   // 成功 → cookie 追加进转发头（保留 SPA 自带 cookie 的合并逻辑）+ 记住 tag/account_id；
   // 失败/超时/后端不可用 → 照旧用 SPA 自带 cookie（= 现状行为）。
+  // v1.2.x alipan：不参与账号池取号 —— 其登录态是 SPA 自带的 Authorization Bearer（非 cookie），
+  // 账号池（uc/quark）也没有 alipan 账号；pan 只用于 trace 标签。
   let accountTag = null;
   let accountId = null;
   let pickedCookie = null;
   let pickedReal = false; // v1.2.2 fix（09-03）：取到正式账号（kind=real）才回传 x-panhub-backend: ok
-  if (env.BACKEND_URL && pan && operation === 'prase') {
+  if (env.BACKEND_URL && pan && pan !== 'alipan' && operation === 'prase') {
     const pick = await pickAccountFromBackend(env, pan, operation);
     if (pick && typeof pick.cookie === 'string' && pick.cookie) {
       accountTag = typeof pick.tag === 'string' && pick.tag ? pick.tag : null;
