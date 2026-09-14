@@ -24,14 +24,14 @@ export const PAN_LIST: PanMeta[] = [
   { id: 'baidu', short: '毒盘', name: '百度网盘', available: false, logo: '/logos/baidupan.png' },
   { id: 'quark', short: '夸', name: '夸克网盘', available: true, logo: '/logos/quark2.png' },
   { id: 'uc', short: 'UC', name: 'UC 网盘', available: true, logo: '/logos/UC2.png' },
-  { id: 'aliyun', short: '阿', name: '阿里云盘', available: true, logo: '/logos/alipan-open.png' },
-  { id: 'mobile', short: '移', name: '移动云盘', available: false, logo: '/logos/139-2.png' },
+  { id: 'aliyun', short: '阿里', name: '阿里云盘', available: true, logo: '/logos/alipan-open.png' },
+  { id: 'mobile', short: '移动', name: '移动云盘', available: false, logo: '/logos/139-2.png' },
   { id: 'ecloud', short: '翼', name: '天翼云盘', available: false, logo: '/logos/cloud189.png' },
   { id: 'ctt', short: '城', name: '城通网盘', available: false, logo: '/logos/ctfile.png' },
   { id: '123', short: '123', name: '123 网盘', available: false, logo: '/logos/123pan.png' },
   { id: 'xunlei', short: '迅', name: '迅雷网盘', available: false, logo: '/logos/xunleiyunpan.png' },
   { id: 'guangya', short: '光', name: '光鸭', available: false, logo: '/logos/guangyapan.png' },
-  { id: '115', short: '1', name: '115 网盘', available: false, logo: '/logos/115open.png' },
+  { id: '115', short: '115', name: '115 网盘', available: false, logo: '/logos/115open.png' },
 ];
 
 export interface PanTableProps {

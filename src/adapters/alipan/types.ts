@@ -80,6 +80,45 @@ export const COPY_ERROR_MESSAGES: Record<string, string> = {
 /** alipan 请求/响应内容类型（分享态 vs 登录态仅由 headers 区分） */
 export const CT_JSON = 'application/json';
 
+/* ============================== v1.3 滚动更新（carry-over） ============================== */
+
+/**
+ * 滚动更新定制话术（v1.3）：**全部定制文案集中在此**，UI 只通过 adapter.carryOver.messages 引用，
+ * 不在组件里硬编码（与 ERROR_MESSAGES / COPY_ERROR_MESSAGES 同风格，好找 + 不乱）。
+ *
+ * 背景：prase = 转存（copy）+ 取直链两跳，直链仅 15min 有效、auth≈2h 有效 ——
+ * 同账号在 auth 生命期内重解析应复用上次 copy 得到的 file_id 直接取直链（「续杯」），
+ * 跳过 copy（省空间、避免「空间满了」）。缓存见 carry.ts。
+ */
+export const ALIPAN_CARRY_MESSAGES = {
+  /** 红色 toast：本地有缓存 + auth 已过期（已发出的一次请求失败即判定，不重试）+ hop 未命中 */
+  expiredToast: '凭据过期了，建议填入上次同一个账号的新凭据这样无需转存哦',
+  /** 绿字提示：新填凭据与缓存同账号（离线 JWT userId 比对，不请求接口） */
+  sameUserHint: '没删吧？老铁',
+  /** 红字提示：新填凭据换了账号（缓存 file_id 属旧账号，续杯失效） */
+  otherUserHint: '换号了？再存一次哦',
+} as const;
+
+/** 滚动更新缓存存储键（见 carry.ts；与 pan-web:alipan-auth:v1 同域同风格，便于一起清理/审计） */
+export const ALIPAN_CARRY_STORAGE_KEY = 'pan-web:alipan-carry:v1';
+
+/**
+ * 「本次请求失败 = auth 过期」的业务码（滚动更新触发前提之一；判定后**不重试**）。
+ * 上游 401 body.code（见 ERROR_MESSAGES）；批量转存内层与 get_download_url 都会出现。
+ */
+export const ALIPAN_CARRY_EXPIRED_CODES: readonly string[] = ['AccessTokenInvalid', 'AccessTokenExpired'];
+
+/**
+ * hop 探测（滚动更新触发判据；**后端尚未实现**，v1.3 占位）：
+ * 语义 = 问代理后端「当前可用的账号身份集合」，与本次 auth 的 userId 比对：
+ *   命中 → 同账号仍有可用凭据 → 静默续杯（不打扰用户）
+ *   未命中/未配置/未实现 → 红色 toast（messages.expiredToast）
+ * 端点常量见 core/transport/types.ts 的 HOP_ACCOUNTS_PATH（通用传输层能力）+ ALIPAN_HOP_PROVIDER。
+ * TODO(backend)：路径/方法/入参（provider + account）/返回体字段（accounts: string[]）待后端实现后对齐，
+ * 见交付摘要「开放问题：hop 探测端点形态」。
+ */
+export const ALIPAN_HOP_PROVIDER = 'alipan';
+
 /**
  * 阿里云盘特性表（偏好设置 UAC 表数据源）：
  * - 目录树可游客读（scan 三接口免登录）；但 prase = 两跳（转存 + 取直链），
@@ -144,5 +183,13 @@ export interface AlipanBatchResponse {
 /** /v2/file/get_download_url 响应（OSS 预签名直链 + 过期时间） */
 export interface AlipanDownloadUrlResult {
   url?: string;
+  /** 上游真实字段名（2026-09-11 真机响应确认）；expire_time 为历史误写，保留兼容 */
+  expiration?: string;
   expire_time?: string;
+  /** 文件校验：sha1（content_hash，配 content_hash_name）；crc64 另存 */
+  content_hash?: string;
+  content_hash_name?: string;
+  crc64_hash?: string;
+  /** 文件大小（字节，本接口会返回） */
+  size?: number;
 }

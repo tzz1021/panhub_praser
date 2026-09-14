@@ -73,6 +73,9 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   // v1.2.x alipan：登录态输入规格缓存为 const —— 闭包内直接引用不会丢 narrowing
   // （quark __pus 整串 / alipan auth 凭据串共用同一弹窗与流程，存取走各适配器 load/save 钩子）
   const cookieInputReq = adapter.cookieInput;
+  // v1.3 alipan：滚动更新（carry-over）规格 —— 过期判定/hop 探测/离线校验与话术均由适配器提供，
+  // 本页只消费结果（toast/行内提示），不硬编码任何文案
+  const carryReq = adapter.carryOver;
   const { toast } = useToast();
 
   const prefs = useMemo(() => getPreferences(), []);
@@ -450,6 +453,22 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           addGlobalLog(`prase：${needLogin.length} 个文件需要登录态 cookie（${cookieInputReq.keys.map((k) => k.key).join('/')}），弹出填写窗`);
           cookieRetryFiles.current = needLogin;
           setCookieInputWarn(true);
+        }
+      }
+      // v1.3 滚动更新（carry-over，仅适配器声明时）：**已发出的一次请求失败即判定**登录态过期，
+      // 本页不重试；问适配器「本地有缓存 + hop 是否还有同账号可用凭据」——
+      // 命中即静默续杯（不提示），否则弹红色 toast（文案来自适配器常量），用户填入同账号新凭据后
+      // 即可复用缓存的转存 file_id，无需再次 copy。
+      if (carryReq?.onExpired) {
+        const expired = results.some(
+          (r) => !r.ok && r.errorCode !== undefined && carryReq.expiredCodes.includes(r.errorCode),
+        );
+        if (expired) {
+          const outcome = await carryReq.onExpired();
+          addGlobalLog(
+            `prase：滚动更新判定 — ${outcome.reason}（${outcome.action === 'silent' ? '静默续杯，不提示' : '提示用户填入同账号新凭据'}）`,
+          );
+          if (outcome.action === 'notify') toast(carryReq.messages.expiredToast, 'error');
         }
       }
       // 捕获状态反馈（弹窗已展示过，这里给个结果）：
@@ -1102,6 +1121,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           panName={adapter.name}
           cookieInput={cookieInputReq}
           value={cookieInputReq.load ? cookieInputReq.load() : cookieInputReq.wholeString ? '' : {}}
+          carryCheck={carryReq?.checkNewAuth}
+          carryMessages={carryReq?.messages}
           onCancel={() => {
             setCookieInputWarn(false);
             const files = cookieRetryFiles.current;

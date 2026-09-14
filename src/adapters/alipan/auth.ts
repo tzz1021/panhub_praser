@@ -8,6 +8,9 @@
  *   `auth=Bearer xxx;drive_id=xxx;to_parent_file_id=<转存目标目录 file_id>;user-agent=<可选>;x-device-id=<可选>`
  * - auth：必填。alipan.com 已登录网页 F12 → 任意 /adrive/v2 或 /v2 请求的
  *   `Authorization: Bearer <jwt>` 整行（可只贴 token，代码自动补 Bearer 前缀）；有效期≈2h
+ *   v1.3 兼容：**只写 `Bearer xxx`（无 auth= 键、无其他字段）也要能当 auth 用**——裸 Authorization
+ *   整行是最省事的贴法；解析器在找不到 `auth=` 键时向后兼容提取 Bearer 令牌（见 parseAlipanAuthString）。
+ *   其余字段（drive_id/to_parent_file_id/…）仍可键值对出现，可与裸 Bearer 混写
  * - drive_id：必填。自己账号的 drive_id（与 auth 同一份 F12 抓包：/adrive/v2/... 请求
  *   响应体或后续请求 body 里的 drive_id 字段，长数字串）—— copy 转存与 get_download_url 都要
  * - to_parent_file_id：必填。自己在 alipan.com/drive 里目标目录的 file_id
@@ -105,6 +108,16 @@ export function parseAlipanAuthString(authString: string): AlipanAuth {
         break;
     }
   });
+
+  // v1.3 兼容：没有 `auth=` 键时，把裸 Authorization 整行/纯 token 当 auth 用
+  // （规格：只写 `Bearer xxx`、无其他字段也要能解析；drive_id/to_parent_file_id 仍可键值对混写）
+  if (!out.auth) {
+    const bearer = /Bearer\s+([A-Za-z0-9._~+/=-]+)/i.exec(src);
+    // 纯 JWT（三段 base64url，无 Bearer 前缀、无键值对标记）
+    const bare = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.exec(src);
+    const token = bearer?.[1] ?? bare?.[0];
+    if (token) out.auth = token;
+  }
   return out;
 }
 
@@ -119,7 +132,11 @@ export function buildAlipanAuthString(map: Record<string, string>): string {
 /** 当前凭据串里已有的关键键（弹窗展示“已检测到 auth/to_parent_file_id…”） */
 export function alipanAuthKeysPresent(authString: string): string[] {
   const esc = (k: string) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return ALIPAN_AUTH_KEYS.filter((k) => new RegExp(`(?:^|;)\\s*${esc(k)}=`).test(authString ?? ''));
+  const keys = ALIPAN_AUTH_KEYS.filter((k) => new RegExp(`(?:^|;)\\s*${esc(k)}=`).test(authString ?? ''));
+  // v1.3：裸 `Bearer xxx` / 纯 token 形态没有 `auth=` 键标记，按解析结果补报
+  // （否则弹窗会误报「未检测到必要 key」，用户明明填对了 auth）
+  if (!keys.includes('auth') && parseAlipanAuthString(authString).auth) return ['auth', ...keys];
+  return keys;
 }
 
 /** 是否具备转存条件（auth 是硬前提；to_parent_file_id 决定能否落盘，缺了会弹窗提示补） */

@@ -22,8 +22,20 @@ import type { CookieInputRequirement } from '../adapters/types';
 import { getLastProxyAccountLabel } from '../core/transport/types';
 import { parseCookieText } from '../adapters/quark/cookies';
 
-/** 整串里检测哪些声明键已出现（键值按 `k=` 段定位；值内 ';' 不影响存在性判断） */
-function detectedKeys(text: string, keys: Array<{ key: string; label: string }>): string[] {
+/** 整串里检测哪些声明键已出现（键值按 `k=` 段定位；值内 ';' 不影响存在性判断）。
+ * v1.3：适配器提供 probeKeys 时以它为准（能认裸 `Bearer xxx` 形态，见 alipan/auth.ts）。 */
+function detectedKeys(
+  text: string,
+  keys: Array<{ key: string; label: string }>,
+  probe?: (text: string) => string[],
+): string[] {
+  if (probe) {
+    try {
+      return probe(text);
+    } catch {
+      // 适配器检测失败回退内置实现，不影响填写
+    }
+  }
   const esc = (k: string) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return keys.map((k) => k.key).filter((k) => new RegExp(`(?:^|;)\\s*${esc(k)}=`).test(text));
 }
@@ -46,6 +58,13 @@ export interface CookieInputModalProps {
   /** 保存：wholeString 模式给整串；多键模式给映射 */
   onSave: (value: string | Record<string, string>) => void;
   onCancel: () => void;
+  /**
+   * v1.3 滚动更新：新凭据与缓存账号的**离线**比对（adapter.carryOver.checkNewAuth，不请求接口）。
+   * 'same' = 同账号（绿字）/ 'other' = 换号（红字）/ null = 无缓存或无法判定（不显示）。
+   */
+  carryCheck?: (authString: string) => 'same' | 'other' | null;
+  /** v1.3 滚动更新定制话术（adapter.carryOver.messages；缺省 = 不显示提示） */
+  carryMessages?: { sameUserHint: string; otherUserHint: string };
 }
 
 /** 插件商店链接（get cookies.txt LOCALLY，社区常用导出插件） */
@@ -74,7 +93,15 @@ function RedDot({ children }: { children: React.ReactNode }): JSX.Element {
   );
 }
 
-export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel }: CookieInputModalProps): JSX.Element {
+export function CookieInputModal({
+  panName,
+  cookieInput,
+  value,
+  onSave,
+  onCancel,
+  carryCheck,
+  carryMessages,
+}: CookieInputModalProps): JSX.Element {
   const wholeString = Boolean(cookieInput.wholeString);
   const initialStr = typeof value === 'string' ? value : '';
   const [fieldStr, setFieldStr] = useState(initialStr);
@@ -84,6 +111,37 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
   const [pasteText, setPasteText] = useState('');
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * 行内滚动更新提示（v1.3，右侧嵌入，不新开弹窗）：随输入实时**离线**判定新凭据与缓存账号
+   * 是否同一账号 —— 绿 = 同账号（续杯可用）；红 = 换号（缓存 file_id 属旧账号，需重新转存）。
+   * 文案全部来自 carryMessages（适配器常量）；无缓存/解不出身份（null）时不显示。
+   */
+  const renderCarryHint = (text: string): JSX.Element | null => {
+    if (!carryCheck || !carryMessages) return null;
+    const t = text.trim();
+    if (!t) return null;
+    let verdict: 'same' | 'other' | null = null;
+    try {
+      verdict = carryCheck(t);
+    } catch {
+      return null; // 判定失败不影响填写/保存
+    }
+    if (!verdict) return null;
+    return (
+      <span
+        style={{
+          marginLeft: 'auto',
+          fontSize: 12.5,
+          fontWeight: 600,
+          whiteSpace: 'nowrap',
+          color: verdict === 'same' ? 'var(--primary)' : 'var(--danger)',
+        }}
+      >
+        {verdict === 'same' ? carryMessages.sameUserHint : carryMessages.otherUserHint}
+      </span>
+    );
+  };
   // v1.2.2：最近一次代理响应回传的代理托管账号（x-panhub-account，仅 label 不含 cookie 明文）；
   // 弹窗在失败请求之后挂载，此刻拿到的即最近一次响应的值。
   const proxyAccount = getLastProxyAccountLabel();
@@ -94,7 +152,7 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
       const joined = kvString(parsed);
       setFieldStr(joined);
       // v1.2.x alipan 泛化：检测键从 cookieInput.keys 取（夸克 __pus 系 / alipan auth 系）
-      const found = detectedKeys(joined, cookieInput.keys);
+      const found = detectedKeys(joined, cookieInput.keys, cookieInput.probeKeys);
       setImportMsg(
         found.length > 0
           ? { ok: true, text: `识别到登录态 key：${found.join(' / ')}，已填入` }
@@ -208,17 +266,24 @@ export function CookieInputModal({ panName, cookieInput, value, onSave, onCancel
               {(() => {
                 // v1.2.x alipan 泛化：检测键从 cookieInput.keys 取（不再硬编码夸克 __pus）
                 const keys = cookieInput.keys ?? [];
-                const found = detectedKeys(fieldStr, keys);
+                const found = detectedKeys(fieldStr, keys, cookieInput.probeKeys);
                 const required = keys[0]?.key ?? '';
-                return found.length > 0 ? (
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-dim)' }}>
-                    已检测到登录态 key：{found.join(' / ')}
-                    {required && !found.includes(required) && `（缺少 ${required}，可能无法通过鉴权）`}
-                  </p>
-                ) : (
-                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-faint)' }}>
-                    未检测到必要 key（{keys.map((k) => k.key).join(' / ')}），请检查粘贴内容
-                  </p>
+                // v1.3：检测行与滚动更新红/绿提示同一行（右侧嵌入；auth / drive_id /
+                // to_parent_file_id 就是本整串输入行里的三个键）
+                return (
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                    {found.length > 0 ? (
+                      <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-dim)' }}>
+                        已检测到登录态 key：{found.join(' / ')}
+                        {required && !found.includes(required) && `（缺少 ${required}，可能无法通过鉴权）`}
+                      </p>
+                    ) : (
+                      <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-faint)' }}>
+                        未检测到必要 key（{keys.map((k) => k.key).join(' / ')}），请检查粘贴内容
+                      </p>
+                    )}
+                    {renderCarryHint(fieldStr)}
+                  </div>
                 );
               })()}
             </div>

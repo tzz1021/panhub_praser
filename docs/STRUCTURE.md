@@ -1,5 +1,4 @@
-# 云链解析站（pan-web）— 源码目录结构 v1
-
+# 云链解析站（panhub_praser）— 源码目录结构
 > 命名规范：kebab-case 文件名、PascalCase 组件、camelCase 变量
 > 职责分离：`adapters/`（网盘差异）与 `core/`（通用逻辑）严格隔离，UI 不直接碰网盘细节
 
@@ -14,6 +13,7 @@ pan-web/
 │   └── logos/
 ├── docs/
 │   ├── reverse-notes-uc.md        # UC 逆向笔记（完工版，适配器开发依据）
+│   ├── Cautions.md                # 坑位日志（时间倒序：现象/根因/修法/教训，只记已查实的）
 │   ├── changelog.md               # 面向开发者：变更日志（repo:/dev/ 入口）
 │   ├── ai-usage.md                # 面向开发者：AI 协作规范（本项目如何被 AI 维护）
 │   └── migration-linkswift.md     # 首次提交：LinkSwift 功能迁移说明 + 版权声明
@@ -43,6 +43,7 @@ pan-web/
 │   │   │   ├── registry.ts        #     组装完整 alipanAdapter
 │   │   │   ├── scanner.ts         #     scan（免登录三连，next_marker 分页）/ prase（两跳：转存→直链）
 │   │   │   ├── auth.ts            #     登录态凭据串（auth=Bearer xxx;to_parent_file_id=…）存取/解析
+│   │   │   ├── carry.ts           #     v1.3 滚动更新（carry-over）：转存 file_id 缓存 + 续杯 + 过期判定
 │   │   │   ├── selector.ts        #     链接识别：短链接 / /folder/ 深链（双域）
 │   │   │   └── jumper.ts          #     深链文件夹跳转链接构建/解析
 │   │   └── README.md              #   新网盘接入指南（照着 uc/ 抄结构即可）

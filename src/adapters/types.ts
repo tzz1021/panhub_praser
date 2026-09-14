@@ -213,6 +213,12 @@ export interface CookieInputRequirement {
    * alipan 的凭据不是浏览器 cookie，需说明 token + 转存目标目录的填写方式。
    */
   intro?: string;
+  /**
+   * v1.3：检测“已有哪些关键键”的适配器钩子（缺省 = UI 按 `k=` 标记自行检测）。
+   * alipan 用：裸 `Bearer xxx` / 纯 token 形态没有 `auth=` 键标记，需适配器侧的解析结果补报，
+   * 否则弹窗会误报「未检测到必要 key」（见 alipan/auth.ts 的 alipanAuthKeysPresent）。
+   */
+  probeKeys?: (text: string) => string[];
   /** 整串模式大输入框的 placeholder（缺省 = 夸克默认文案） */
   wholeStringPlaceholder?: string;
   /**
@@ -230,6 +236,37 @@ export interface CookieInputRequirement {
   notice?: string;
   /** 未提供时的排查话术 */
   missingHint?: string;
+}
+
+/**
+ * v1.3 alipan：滚动更新（carry-over）能力规格（登录态过期后的续杯决策 + 新凭据离线校验）。
+ * 实现细节（缓存/解码/hop 探测）全在适配器侧（adapters/alipan/carry.ts），
+ * UI 只读本对象 —— 包括定制话术（messages），组件不得硬编码文案。
+ */
+export interface CarryOverRequirement {
+  /** 判定「登录态过期」的业务码（已发出的一次请求失败即判定，不重试） */
+  expiredCodes: ReadonlyArray<number | string>;
+  /**
+   * 过期后的决策（适配器侧实现；UI 只消费结果）：
+   * - action 'silent' = 不打扰用户（本地无缓存 / hop 命中同账号 → 静默续杯）
+   * - action 'notify' = 提示填入上次同账号的新凭据（红色 toast，文案 = messages.expiredToast）
+   * - reason = 判定原因（进解析日志，便于排查；非用户可见文案）
+   */
+  onExpired?(): Promise<{ action: 'silent' | 'notify'; reason: string }>;
+  /**
+   * 用户填入新凭据后的**离线**校验（不请求任何接口）：
+   * 'same' = 与本地缓存同账号（绿字 hints）/ 'other' = 换号（红字）/ null = 无缓存或无法判定（不提示）
+   */
+  checkNewAuth?(authString: string): 'same' | 'other' | null;
+  /** 定制话术（集中在适配器侧常量区，UI 只引用） */
+  readonly messages: {
+    /** 凭据过期 + hop 未命中时的红色 toast */
+    expiredToast: string;
+    /** 新凭据与缓存同账号（绿字） */
+    sameUserHint: string;
+    /** 新凭据换了账号（红字） */
+    otherUserHint: string;
+  };
 }
 
 export interface PanAdapter {
@@ -252,6 +289,12 @@ export interface PanAdapter {
   readonly cookie?: CookieRequirement;
   /** 登录态 cookie 输入规格（夸克 __pus 整串；无 = 不需要用户填 cookie） */
   readonly cookieInput?: CookieInputRequirement;
+  /**
+   * v1.3 滚动更新（carry-over）能力规格（无 = 该网盘无此机制）。
+   * 语义：prase 需先转存（copy）再取直链的网盘，在登录态凭据生命期内重解析时
+   * 复用上次转存得到的 file_id 直接取直链（「续杯」），跳过 copy。
+   */
+  readonly carryOver?: CarryOverRequirement;
   /** 从分享链接提取分享 ID；无法识别返回 null */
   parseShareId(url: string): ShareId | null;
   /**
