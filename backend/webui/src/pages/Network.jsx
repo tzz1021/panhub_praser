@@ -48,8 +48,8 @@ export default function Network({ toast }) {
       return;
     }
     // 文案一字不差（设计稿 §7）
-    const ok = window.confirm('由于 ws 限制，现在即将开启 wrangler 自带的 devtools。如果 wrangler 不在本机运行（比如 ssh 穿透 webui），这里不能转发 devtools，请去系统终端完成穿透。');
-    if (ok) window.open(`http://127.0.0.1:${inspectorPort}`);
+    const ok = window.confirm('由于 ws 限制，现在即将展示wrangler运行信息。如果 wrangler 不在本机运行（比如 ssh 穿透 webui），这里不能转发，请去系统终端完成穿透。');
+    if (ok) window.open(`http://127.0.0.1:${inspectorPort}/json/list`);
   };
 
   return (
@@ -62,17 +62,17 @@ export default function Network({ toast }) {
             <tr>
               <td style={{ width: 160 }}>Proxy / WebUI 端口</td>
               <td className="mono">{net.proxy.host}:{net.proxy.port}</td>
-              <td className="muted">单 listener：/api/proxy + /api/web/* 同一端口；SPA 填 proxy_address（企业部署 = 服务器内网地址，见 README；本地联调 = 本机地址，不能用 127.0.0.1 跨机访问）</td>
+              <td className="muted">单 listener：/api/proxy + /api/web/* 同一端口</td>
             </tr>
             <tr>
               <td>wrangler 转发</td>
               <td className="mono">{net.wrangler?.bind ?? '0.0.0.0'}:{net.wrangler?.port ?? '-'}</td>
-              <td className="muted">wrangler pages dev（proxy.js 是校验策略唯一实现；PANHUB_BIND 控制绑定，默认 0.0.0.0 企业内网可达）</td>
+              <td className="muted">proxy.js 是校验策略唯一实现；PANHUB_BIND 控制绑定，默认 0.0.0.0 内网可达</td>
             </tr>
             <tr>
               <td>inspector</td>
               <td className="mono">{net.wrangler?.inspectorPort ?? '-'}</td>
-              <td className="muted">devtools ws 端口（仅健康检查，不消费 CDP）</td>
+              <td className="muted">devtools ws 端口（仅健康检查）</td>
             </tr>
             <tr>
               <td>autoSpawn</td>

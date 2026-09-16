@@ -28,6 +28,23 @@ export class TransportError extends Error {
   }
 }
 
+/* ============ v1.3.1 四类操作词表（与 functions/_shared/proxy-core.js + backend/src/proxy.js 同表） ============ */
+
+/**
+ * URL 特征 → 操作分类（四类：scan | download | restore | credential-pick | other）。
+ * 与云端 `functions/api/_shared/proxy-core.js#classifyOperation`、
+ * 后端 `backend/src/proxy.js#classifyOperation` **同一张表**（三处最小复制，改动必须同步；
+ * 自测 `panhub-1.3.1-selfcheck` 里有同一批用例断言防漂移）。
+ */
+export function classifyOperation(url: string): 'scan' | 'download' | 'restore' | 'credential-pick' | 'other' {
+  if (/sharepage\/(token|detail)/.test(url)) return 'scan'; // uc/quark
+  if (/\/v2\/share_link\/get_share_token|\/adrive\/v2\/file\/get_by_share|\/adrive\/v2\/file\/list_by_share/.test(url)) return 'scan'; // alipan
+  if (/file\/download/.test(url)) return 'download'; // uc/quark
+  if (/\/v2\/file\/get_download_url/.test(url)) return 'download'; // alipan
+  if (/\/adrive\/v4\/batch/.test(url)) return 'restore'; // alipan 批量转存
+  return 'other';
+}
+
 /** 传输层请求（adapter 用） */
 export interface TransportRequest {
   /** 完整目标 URL（含 query，原样透传） */
@@ -144,6 +161,8 @@ export class ProxyTransport implements Transport {
   private readonly token: string;
   /** v1.2.2：IP 采集（哈希化后上传）——开时请求带 x-panhub-trace: ip-hash 头，服务端 sha256(ip+salt) 后落库 */
   private readonly ipHash: boolean;
+  /** v1.3.1：已知对面是旧部署（无四类路由）→ 本会话直接用兼容别名 /api/proxy */
+  private legacyRoute: boolean | null = null;
 
   constructor(base: string, token = '', ipHash = false) {
     this.base = base;
@@ -153,6 +172,16 @@ export class ProxyTransport implements Transport {
 
   available(): boolean {
     return Boolean(this.base);
+  }
+
+  /**
+   * v1.3.1 四类拆分：目标 URL → 代理路由。
+   * other（未识别的上游端点，如 token 之外的辅助接口）仍走兼容别名，避免误判导致 400。
+   */
+  private routeOf(url: string): string {
+    const kind = classifyOperation(url);
+    if (kind === 'other' || this.legacyRoute === true) return '/api/proxy';
+    return `/api/${kind}`;
   }
 
   /**
@@ -188,7 +217,7 @@ export class ProxyTransport implements Transport {
   async request(req: TransportRequest): Promise<TransportResponse> {
     let res: Response;
     try {
-      res = await fetch(`${this.base}/api/proxy`, {
+      res = await fetch(`${this.base}${this.routeOf(req.url)}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -205,6 +234,26 @@ export class ProxyTransport implements Transport {
           frontend_id: crypto.randomUUID(),
         }),
       });
+      // v1.3.1 四类拆分：新部署走 /api/<类>；若对面是未升级的部署（无该类路由）→
+      // 落回兼容别名 /api/proxy 重发一次（行为与拆分前完全一致），并记住本会话不再尝试
+      if ((res.status === 404 || res.status === 405) && this.legacyRoute !== true) {
+        this.legacyRoute = true;
+        res = await fetch(`${this.base}/api/proxy`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.token ? { 'X-Proxy-Token': this.token } : {}),
+            ...(this.ipHash ? { 'x-panhub-trace': 'ip-hash' } : {}),
+          },
+          body: JSON.stringify({
+            url: req.url,
+            method: req.method ?? 'GET',
+            headers: req.headers ?? {},
+            body: req.body ?? null,
+            frontend_id: crypto.randomUUID(),
+          }),
+        });
+      }
     } catch (err) {
       // 代理地址不可达 / 代理没带 CORS 头
       throw new TransportError('network', `代理请求失败：${err instanceof Error ? err.message : String(err)}（请检查代理地址或网络）`);
@@ -237,6 +286,11 @@ export class ProxyTransport implements Transport {
     if (headers['x-panhub-backend'] === 'ok') {
       lastProxyBackendOk = true;
     }
+    // v1.3.1 四类规范：托管状态新头 x-panhub-credential: picked|guest|none
+    // （旧头 x-panhub-backend 仍兼容一版，见上）
+    const credState = headers['x-panhub-credential'];
+    if (credState === 'picked') lastProxyBackendOk = true;
+    else if (credState === 'guest' || credState === 'none') lastProxyBackendOk = false;
     return {
       status: res.status,
       headers,

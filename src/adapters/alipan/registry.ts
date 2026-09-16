@@ -13,12 +13,17 @@
  * - v1.3 有 carryOver（滚动更新）：prase 两跳的转存结果按账号缓存，auth 生命期内命中即续杯
  */
 import type { PanAdapter } from '../types';
-import { ALIPAN_LIMITS, ALIPAN_DOWNLOAD_HEADERS, ALIPAN_CARRY_MESSAGES, ALIPAN_CARRY_EXPIRED_CODES } from './types';
+import { ALIPAN_LIMITS, ALIPAN_DOWNLOAD_HEADERS, ALIPAN_CARRY_MESSAGES, ALIPAN_CARRY_EXPIRED_CODES, ALIPAN_ACCOUNT_SWITCH_PROMPT, ALIPAN_MISSING_FIELDS_HINT } from './types';
 import { alipanScanner } from './scanner';
 import { detect, parseShareId } from './selector';
 import { buildJumpUrl, parseJumpUrl } from './jumper';
 import { ALIPAN_AUTH_KEYS, getAlipanAuthString, setAlipanAuthString, alipanAuthKeysPresent } from './auth';
-import { checkAlipanCarryNewAuth, onAlipanExpired } from './carry';
+import {
+  applyAlipanCredentialSave,
+  checkAlipanCarryNewAuth,
+  onAlipanExpired,
+  planAlipanCredentialSave,
+} from './carry';
 
 /** 阿里云盘适配器实例（注册进 registry 后即启用，UI 侧按接口驱动） */
 export const alipanAdapter: PanAdapter = {
@@ -58,6 +63,11 @@ export const alipanAdapter: PanAdapter = {
     expiredCodes: ALIPAN_CARRY_EXPIRED_CODES,
     onExpired: onAlipanExpired,
     checkNewAuth: checkAlipanCarryNewAuth,
+    // v1.3.1 凭据快捷更新：合并写入 + 必填项闸门 + 账号变化弹窗（话术在 types.ts 常量区）
+    planCredentialSave: planAlipanCredentialSave,
+    applyCredentialSave: applyAlipanCredentialSave,
+    accountSwitchPrompt: ALIPAN_ACCOUNT_SWITCH_PROMPT,
+    missingHintPrefix: ALIPAN_MISSING_FIELDS_HINT,
     messages: ALIPAN_CARRY_MESSAGES,
   },
   // 深链文件夹跳转（/s/<shareId>/folder/<fid>，web 地址栏形态）

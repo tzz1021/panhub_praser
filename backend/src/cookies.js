@@ -53,24 +53,30 @@ export function keysPresent(cookieString, pan, kind = 'real') {
 /* ---------------- CRUD ---------------- */
 
 /** 账号列表（cookie 值脱敏：只露末 8 位；expiresAt/status/lastUsedAt 明细） */
+/**
+ * 账号列表（**读写分离：只回非敏感元数据**）。
+ * v1.3.1（Tzz 定稿）：去掉 cookieTail / cookieLength / keys 等指纹字段 —— 读不裸奔；
+ * 只保留备注/状态/时间 + **账号身份**（userId，非敏感，供辨认与滚动更新比对）。
+ * 备注缺省时回退到身份（Tzz：不要回退 #num）。
+ */
 export function listAccounts() {
   const rows = getDb().prepare('SELECT * FROM accounts ORDER BY pan, id').all();
   return rows.map((r) => {
-    const plain = decrypt(r.cookie_enc) ?? '';
+    const userId = accountIdentity(r);
     return {
       id: r.id,
       pan: r.pan,
-      label: r.label ?? '',
+      label: (r.label ?? '').trim() || userId || '',
       kind: r.kind ?? 'real',
       status: r.status,
+      userId,
       expiresAt: r.expires_at,
+      tempExpiresAt: r.temp_expires_at ?? null,
+      isTemp: Boolean(r.temp_expires_at),
       lastUsedAt: r.last_used_at,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
-      cookieTail: plain.slice(-8),
-      cookieLength: plain.length,
-      keys: keysPresent(plain, r.pan, r.kind),
-      // 整串明文只在"编辑时回填"接口返回（getAccount），列表不回
+      // 凭据本体与任何指纹（长度/尾串/关键 key）都不出现在接口层
     };
   });
 }
@@ -126,21 +132,40 @@ export function upsertAccount(fields, via = 'webui') {
   }
   const now = Date.now();
   const expiresAt = Number.isFinite(Number(fields.expiresAt)) && Number(fields.expiresAt) > 0 ? Number(fields.expiresAt) : null;
+  // v1.3.1：临时写入 —— ttlMinutes > 0 时记录自动清除时间（到期由 sweepTempAccounts 清凭据，审计保留）
+  const ttl = Number(fields.ttlMinutes);
+  const tempExpiresAt = Number.isFinite(ttl) && ttl > 0 ? now + Math.round(ttl) * 60_000 : null;
   const enc = encrypt(cookieString);
   const db = getDb();
   if (fields.id) {
     db.prepare(
-      'UPDATE accounts SET pan=?, label=?, cookie_enc=?, expires_at=?, status=?, kind=?, updated_at=? WHERE id=?',
-    ).run(pan, label, enc, expiresAt, 'ok', kind, now, fields.id);
-    audit('account.update', `${pan}/${label}`, via);
+      'UPDATE accounts SET pan=?, label=?, cookie_enc=?, expires_at=?, temp_expires_at=?, status=?, kind=?, updated_at=? WHERE id=?',
+    ).run(pan, label, enc, expiresAt, tempExpiresAt, 'ok', kind, now, fields.id);
+    audit(tempExpiresAt ? 'account.temp-write' : 'account.update', `${pan}/${label}${tempExpiresAt ? `（临时 ${Math.round(ttl)} 分钟）` : ''}`, via);
+    return fields.id;
   } else {
     const info = db
-      .prepare('INSERT INTO accounts (pan, label, cookie_enc, expires_at, status, kind, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)')
-      .run(pan, label, enc, expiresAt, 'ok', kind, now, now);
-    audit('account.add', `${pan}/${label}`, via);
+      .prepare(
+        'INSERT INTO accounts (pan, label, cookie_enc, expires_at, temp_expires_at, status, kind, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+      )
+      .run(pan, label, enc, expiresAt, tempExpiresAt, 'ok', kind, now, now);
+    audit(tempExpiresAt ? 'account.temp-write' : 'account.add', `${pan}/${label}${tempExpiresAt ? `（临时 ${Math.round(ttl)} 分钟）` : ''}`, via);
     return info.lastInsertRowid;
   }
   return fields.id;
+}
+
+/**
+ * 清扫到期临时写入（v1.3.1）：只删凭据行，**审计保留**（Tzz：临时写入算新号，记得保留审计）。
+ * @returns 被清除的账号摘要（供上层写审计/日志）
+ */
+export function sweepTempAccounts() {
+  const now = Date.now();
+  const rows = getDb().prepare('SELECT id, pan, label FROM accounts WHERE temp_expires_at IS NOT NULL AND temp_expires_at <= ?').all(now);
+  if (rows.length === 0) return [];
+  const stmt = getDb().prepare('DELETE FROM accounts WHERE id = ?');
+  for (const r of rows) stmt.run(r.id);
+  return rows.map((r) => ({ id: r.id, pan: r.pan, label: r.label ?? '' }));
 }
 
 /** 删除账号 */
@@ -159,8 +184,9 @@ export function deleteAccount(id, via = 'webui') {
  * - scan：保持游客，不注入
  * @returns { account, cookieString, tag } | null
  */
-export function pickAccountForPan(pan, operation = 'prase') {
-  if (operation !== 'prase') return null;
+export function pickAccountForPan(pan, operation = 'download') {
+  // v1.3.1 四类词表：取号只对 download（旧名 prase）生效；scan/restore 不注入登录态
+  if (operation !== 'download' && operation !== 'prase') return null;
   const db = getDb();
   const rows = db
     .prepare("SELECT * FROM accounts WHERE pan = ? AND kind = 'real' ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT 1")
@@ -321,4 +347,64 @@ export async function runRefreshCycle() {
   } catch (err) {
     log('error', `refresh：周期异常 — ${err?.message ?? err}`);
   }
+}
+
+/* ============================== v1.3.1 账号身份（非敏感） ============================== */
+
+/**
+ * 离线解凭据串里的 JWT 账号 id（规则与前端 carry.ts 一致：userId → user_id → sub → uid）。
+ * 凭据串形态：alipan `auth=Bearer xxx;drive_id=…`（也可能只贴 Bearer/纯 token）；uc/quark 是 cookie 整串。
+ */
+function decodeAccountUserId(credentialString) {
+  const s = String(credentialString ?? '');
+  let token = /Bearer\s+([A-Za-z0-9._~+/=-]+)/i.exec(s)?.[1];
+  if (!token) {
+    const m = /(?:^|[;\s])auth=([A-Za-z0-9._~+/=-]+)/i.exec(s);
+    if (m) token = m[1].replace(/^Bearer\s+/i, '');
+  }
+  if (!token || token.split('.').length !== 3) return null;
+  try {
+    const json = Buffer.from(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+    const claims = JSON.parse(json);
+    for (const key of ['userId', 'user_id', 'sub', 'uid']) {
+      const v = claims?.[key];
+      if (typeof v === 'string' && v) return v;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 账号身份（**非敏感**，可回传 SPA/functions 做账号比对）：
+ * JWT userId → `drive:<drive_id>`（凭据里显式写的）→ 账号标签兜底（uc/quark 无 JWT 时只能如此）。
+ * 注意：**绝不返回凭据本体**；Tzz D2：换号不换 #3 没意义，优先 userId。
+ */
+export function accountIdentity(a) {
+  if (!a) return null;
+  let plain = '';
+  try {
+    plain = decrypt(a.cookie_enc) ?? '';
+  } catch {
+    plain = '';
+  }
+  const userId = decodeAccountUserId(plain);
+  if (userId) return userId;
+  const driveId = /drive_id=([A-Za-z0-9_-]+)/i.exec(plain)?.[1];
+  if (driveId) return `drive:${driveId}`;
+  return accountTag(a);
+}
+
+/** 某网盘（缺省全部）可用账号的身份集合（去重；只含非敏感身份） */
+export function listAccountIdentities(pan = null) {
+  const rows = pan
+    ? getDb().prepare('SELECT * FROM accounts WHERE pan = ? ORDER BY id').all(pan)
+    : getDb().prepare('SELECT * FROM accounts ORDER BY pan, id').all();
+  const out = [];
+  for (const r of rows) {
+    const id = accountIdentity(r);
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
 }

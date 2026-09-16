@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import type { ShareFile } from '../adapters/types';
+import type { CarryOverCredentialPlan } from '../adapters/types';
 import { DirectoryTree, collectLeaves, flattenTree } from '../components/DirectoryTree';
 import type { TreeRow } from '../components/DirectoryTree';
 import { FileCheckbox } from '../components/FileCheckbox';
@@ -36,6 +37,7 @@ import { getPugs } from '../adapters/uc/cookies';
 import { getQuarkPugs } from '../adapters/quark/cookies';
 import { QUARK_LOGIN_SIZE } from '../adapters/quark/types';
 import { CookieInputModal } from '../components/CookieInputModal';
+import { AccountOverwriteModal } from '../components/AccountOverwriteModal';
 import { exportTask, exportTreeMd } from '../tasks/export';
 import { DOWNLOADER_PRESETS, loadDownloaderConfig, pushFilesToDownloader } from '../utils/downloader';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
@@ -174,6 +176,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   const [cookieWarn, setCookieWarn] = useState<{ files: ShareFile[] } | null>(null);
   // v1.1.9：登录态 cookie 填写弹窗（夸克 23018/31001 时弹出，保存后自动重试失败文件）
   const [cookieInputWarn, setCookieInputWarn] = useState(false);
+  // v1.3.1 alipan：换号 → 弹「是否覆盖当前暂存区的 userid」（等用户选择后再落库/重试）
+  const [accountSwitch, setAccountSwitch] = useState<{ plan: CarryOverCredentialPlan } | null>(null);
   const cookieRetryFiles = useRef<ShareFile[]>([]);
   const pendingFetch = useRef<ShareFile[] | null>(null);
   // v1.2.2（wip2 修正）：代理托管 toast 一次性标志（已提示过就不再刷屏）
@@ -551,6 +555,34 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     } finally {
       setFetching(false);
       setFetchProgress(null);
+    }
+  };
+
+  /**
+   * v1.3.1：凭据保存后的统一收尾（原「空保存」分支逻辑抽出，供直接落库与覆盖弹窗两条路径共用）
+   */
+  const retryAfterCredentialSave = (filled: boolean): void => {
+    const retry = cookieRetryFiles.current;
+    addGlobalLog(`prase：登录态 cookie 已保存（${filled ? '有值' : '清空'}），重试 ${retry.length} 个失败文件`);
+    if (filled && retry.length > 0) {
+      void doFetchLinks(retry);
+    } else if (retry.length > 0) {
+      // v1.2.2 拍板之四：未填 cookie → 重试（代理托管/取号模式下后端自动注入账号，重试即成功；
+      // 直连无托管才是名副其实的随机游客试探）。
+      // v1.2.2 fix（09-03）：预判式 toast 只在**直连**（不存在 selfhost）时准确 —— 代理模式下
+      // 后端是否托管就绪只有请求结果能证明：成功 → doFetchLinks 末尾「已使用代理托管账号」toast
+      // （backendOkToastShown 去重）；失败 → 行内红 + 弹窗重试入口。此前守卫用
+      // getLastProxyBackendOk() 读**上一次**响应头预判：首次 prase 弹窗取消时上一次响应必然
+      // 没有该头（09-03 前服务端压根没下发过 x-panhub-backend），取号成功也误报「随机游客」。
+      if (getActiveTransport().id !== 'proxy') {
+        toast(
+          '未检测到 selfhost 也未手动填写 cookie：已按随机游客尝试（大概率直接失败，可用于试探网盘是否支持游客）',
+          'info',
+        );
+      } else {
+        addGlobalLog('prase：未手动填写 cookie —— 代理通道已配置，重试结果以服务端实际注入为准');
+      }
+      void doFetchLinks(retry);
     }
   };
 
@@ -1123,6 +1155,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           value={cookieInputReq.load ? cookieInputReq.load() : cookieInputReq.wholeString ? '' : {}}
           carryCheck={carryReq?.checkNewAuth}
           carryMessages={carryReq?.messages}
+          planSave={carryReq?.planCredentialSave}
+          missingHintPrefix={carryReq?.missingHintPrefix}
           onCancel={() => {
             setCookieInputWarn(false);
             const files = cookieRetryFiles.current;
@@ -1153,31 +1187,52 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           }}
           onSave={(value) => {
             setCookieInputWarn(false);
+            // v1.3.1 凭据快捷更新（alipan）：先离线规划（合并上次暂存 + 必填项 + 账号判定）——
+            // 同账号 → 静默合并写入；换号 → 弹「是否覆盖当前暂存区的 userid」等用户选；
+            // 必填项不全 → 直接不写、不发请求（A2，按钮本应已置灰，这里兼底）
+            if (typeof value === 'string' && carryReq?.planCredentialSave) {
+              const plan = carryReq.planCredentialSave(value);
+              addGlobalLog(
+                `prase：凭据规划 — 账号判定 ${plan.verdict}${plan.missing.length ? `，缺失必填项 ${plan.missing.join(' / ')}` : ''}（合并后长度 ${plan.merged.length}）`,
+              );
+              if (plan.missing.length > 0) return;
+              if (plan.verdict === 'changed' && carryReq.accountSwitchPrompt) {
+                setAccountSwitch({ plan });
+                return;
+              }
+              carryReq.applyCredentialSave?.(plan, 'persist');
+              retryAfterCredentialSave(Boolean(plan.merged));
+              return;
+            }
             const filled = typeof value === 'string' ? value.trim().length > 0 : Object.keys(value).length > 0;
             // v1.2.x alipan：整串落库走各适配器 save 钩子（quark 仍存 pan-web:quark-cookie:v1）
             if (typeof value === 'string' && cookieInputReq.save) cookieInputReq.save(value);
-            const retry = cookieRetryFiles.current;
-            addGlobalLog(`prase：登录态 cookie 已保存（${filled ? '有值' : '清空'}），重试 ${retry.length} 个失败文件`);
-            if (filled && retry.length > 0) {
-              void doFetchLinks(retry);
-            } else if (retry.length > 0) {
-              // v1.2.2 拍板之四：未填 cookie → 重试（代理托管/取号模式下后端自动注入账号，重试即成功；
-              // 直连无托管才是名副其实的随机游客试探）。
-              // v1.2.2 fix（09-03）：预判式 toast 只在**直连**（不存在 selfhost）时准确 —— 代理模式下
-              // 后端是否托管就绪只有请求结果能证明：成功 → doFetchLinks 末尾「已使用代理托管账号」toast
-              // （backendOkToastShown 去重）；失败 → 行内红 + 弹窗重试入口。此前守卫用
-              // getLastProxyBackendOk() 读**上一次**响应头预判：首次 prase 弹窗取消时上一次响应必然
-              // 没有该头（09-03 前服务端压根没下发过 x-panhub-backend），取号成功也误报「随机游客」。
-              if (getActiveTransport().id !== 'proxy') {
-                toast(
-                  '未检测到 selfhost 也未手动填写 cookie：已按随机游客尝试（大概率直接失败，可用于试探网盘是否支持游客）',
-                  'info',
-                );
-              } else {
-                addGlobalLog('prase：未手动填写 cookie —— 代理通道已配置，重试结果以服务端实际注入为准');
-              }
-              void doFetchLinks(retry);
-            }
+            retryAfterCredentialSave(filled);
+          }}
+        />
+      )}
+      {/* v1.3.1 账号覆盖确认（阿里云盘特设、强制开启；仅「本次账号 ≠ 上次暂存账号」时出现） */}
+      {accountSwitch && carryReq?.accountSwitchPrompt && (
+        <AccountOverwriteModal
+          title={carryReq.accountSwitchPrompt.title}
+          context={carryReq.accountSwitchPrompt.context}
+          confirmText={carryReq.accountSwitchPrompt.confirm}
+          cancelText={carryReq.accountSwitchPrompt.cancel}
+          onConfirm={() => {
+            const plan = accountSwitch.plan;
+            setAccountSwitch(null);
+            carryReq.applyCredentialSave?.(plan, 'persist');
+            addGlobalLog(
+              `prase：账号变化 — 用户选「${carryReq.accountSwitchPrompt?.confirm}」，覆盖暂存区记录（旧账号的转存映射作废）`,
+            );
+            retryAfterCredentialSave(Boolean(plan.merged));
+          }}
+          onCancel={() => {
+            const plan = accountSwitch.plan;
+            setAccountSwitch(null);
+            carryReq.applyCredentialSave?.(plan, 'session');
+            addGlobalLog('prase：账号变化 — 用户选「否」，本次输入仅本次有效（内存态，不写 localStorage、不进后端统计）');
+            retryAfterCredentialSave(Boolean(plan.merged));
           }}
         />
       )}

@@ -94,7 +94,7 @@ check('info.version = 0.1.0-next + wrangler health 字段', info.version === '0.
 r = await fetch(`${base}/api/web/accounts`, {
   method: 'POST',
   headers: { 'content-type': 'application/json', 'x-webui-token': webuiToken, 'x-csrf-token': csrf },
-  body: JSON.stringify({ pan: 'quark', label: '测试1号', cookieString: '__pus=a; __uid=b; __puus=c' }),
+  body: JSON.stringify({ confirmToken: webuiToken, pan: 'quark', label: '测试1号', cookieString: '__pus=a; __uid=b; __puus=c' }),
 });
 const acc = await r.json();
 check('新增 quark 账号', r.ok && acc.ok, JSON.stringify(acc));
@@ -103,13 +103,77 @@ check('新增 quark 账号', r.ok && acc.ok, JSON.stringify(acc));
 r = await fetch(`${base}/api/web/accounts`, {
   method: 'POST',
   headers: { 'content-type': 'application/json', 'x-webui-token': webuiToken, 'x-csrf-token': csrf },
-  body: JSON.stringify({ pan: 'uc', kind: 'guest', cookieString: '' }),
+  body: JSON.stringify({ confirmToken: webuiToken, pan: 'uc', kind: 'guest', cookieString: '' }),
 });
 const gacc = await r.json();
 check('新增 guest 账号（空 cookie 自动生成）', r.ok && gacc.ok, JSON.stringify(gacc));
 const accList = await (await fetch(`${base}/api/web/accounts`, { headers: { 'x-webui-token': webuiToken } })).json();
 const guestRow = accList.accounts.find((a) => a.kind === 'guest');
-check('guest 账号 label 打标 guest# 且含 __pugs', Boolean(guestRow && /^guest#/.test(guestRow.label) && guestRow.keys.includes('__pugs')), JSON.stringify(guestRow));
+check('guest 账号 label 打标 guest#', Boolean(guestRow && /^guest#/.test(guestRow.label)), JSON.stringify(guestRow));
+
+// ⑨.5 v1.3.1 读写分离：读接口不出凭据/指纹；写删必须二次令牌；临时写入可按时到期
+const listRow = accList.accounts.find((a) => a.pan === 'quark' && a.kind === 'real');
+check(
+  '账号读接口无凭据与指纹字段（读写分离）',
+  Boolean(listRow) && listRow.cookieTail === undefined && listRow.cookieLength === undefined && listRow.keys === undefined && 'userId' in listRow,
+  JSON.stringify(listRow),
+);
+const noConfirm = await fetch(`${base}/api/web/accounts`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-webui-token': webuiToken, 'x-csrf-token': csrf },
+  body: JSON.stringify({ pan: 'uc', kind: 'guest', cookieString: '' }),
+});
+check('账号写入缺二次令牌 → 403', noConfirm.status === 403, `status=${noConfirm.status}`);
+const detailRes = await (await fetch(`${base}/api/web/accounts/${listRow.id}`, { headers: { 'x-webui-token': webuiToken } })).json();
+check('编辑接口不回填凭据（写新不读旧）', detailRes.credentialRefillable === false && detailRes.account.cookieString === undefined, JSON.stringify(detailRes).slice(0, 160));
+const refreshRes = await fetch(`${base}/api/web/accounts/refresh`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-webui-token': webuiToken, 'x-csrf-token': csrf },
+  body: JSON.stringify({}),
+});
+check('账号快照可手动刷新', refreshRes.ok, `status=${refreshRes.status}`);
+r = await fetch(`${base}/api/web/accounts`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-webui-token': webuiToken, 'x-csrf-token': csrf },
+  body: JSON.stringify({ confirmToken: webuiToken, pan: 'uc', kind: 'real', cookieString: '__pugs='.padEnd(208, 'x'), temp: true, ttlMinutes: 45 }),
+});
+const tempAdd = await r.json();
+const tempList = await (await fetch(`${base}/api/web/accounts`, { headers: { 'x-webui-token': webuiToken } })).json();
+const tempRow = tempList.accounts.find((a) => a.id === tempAdd.id);
+check('临时写入：记录 ttl 到期时间且标记 isTemp', r.ok && tempRow?.isTemp === true && tempRow.tempExpiresAt > Date.now(), JSON.stringify(tempRow));
+const delNoConfirm = await fetch(`${base}/api/web/accounts/${tempAdd.id}`, {
+  method: 'DELETE',
+  headers: { 'content-type': 'application/json', 'x-webui-token': webuiToken, 'x-csrf-token': csrf },
+  body: JSON.stringify({}),
+});
+check('删除缺二次令牌 → 403', delNoConfirm.status === 403, `status=${delNoConfirm.status}`);
+
+// ⑨.9 v1.3.1 P4：凭据刷新预设（手动触发 + 限频 + 无浏览器安全降级）
+const pluginsRes = await fetch(`${base}/api/web/plugins`, { headers: { 'x-webui-token': webuiToken } });
+const plugins = await pluginsRes.json();
+check('插件页接口存在且列出预设（旧版该端点缺失 → 页面卡加载中）', pluginsRes.ok && Array.isArray(plugins.plugins) && plugins.plugins.length >= 3, JSON.stringify(plugins).slice(0, 200));
+check('预设列出时不含任何凭据字段', plugins.plugins.every((p) => !('cookieString' in p) && !('credential' in p)), JSON.stringify(plugins.plugins[0]));
+check('浏览器 health 回报（测试环境无浏览器 → 未连接）', plugins.browser?.ok === false && typeof plugins.browser?.reason === 'string', JSON.stringify(plugins.browser));
+const runNoConfirm = await fetch(`${base}/api/web/plugins/alipan-auth-refresh/run`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-webui-token': webuiToken, 'x-csrf-token': csrf },
+  body: JSON.stringify({}),
+});
+check('运行预设缺二次令牌 → 403', runNoConfirm.status === 403, `status=${runNoConfirm.status}`);
+const runRes = await fetch(`${base}/api/web/plugins/alipan-auth-refresh/run`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-webui-token': webuiToken, 'x-csrf-token': csrf },
+  body: JSON.stringify({ confirmToken: webuiToken }),
+});
+const runBody = await runRes.json();
+check('无浏览器时安全降级（明确提示，不抛错）', runRes.status === 429 && /浏览器未连接/.test(runBody.message ?? ''), JSON.stringify(runBody).slice(0, 200));
+const runAgain = await fetch(`${base}/api/web/plugins/alipan-auth-refresh/run`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', 'x-webui-token': webuiToken, 'x-csrf-token': csrf },
+  body: JSON.stringify({ confirmToken: webuiToken }),
+});
+const againBody = await runAgain.json();
+check('预设限频生效（连点第二次被挡）', /限频/.test(againBody.message ?? ''), JSON.stringify(againBody).slice(0, 160));
 
 // ⑩ hosts：新增允许
 r = await fetch(`${base}/api/web/hosts`, {
@@ -118,6 +182,18 @@ r = await fetch(`${base}/api/web/hosts`, {
   body: JSON.stringify({ host: 'drive.quark.cn', pan: 'quark' }),
 });
 check('hosts 新增映射', r.ok);
+// ⑨ v1.3.1 四类路由：credential-pick（取号）+ 身份查询（只回非敏感身份）
+check('credential-pick/accounts 无令牌 → 401', (await fetch(`${base}/api/credential-pick/accounts`)).status === 401);
+const identRes = await fetch(`${base}/api/credential-pick/accounts`, { headers: { 'x-proxy-token': proxyToken } });
+const ident = await identRes.json();
+check('credential-pick/accounts 只回非敏感身份', identRes.ok && Array.isArray(ident.accounts) && ident.accounts.every((x) => typeof x === 'string' && x.length < 64 && !/__pus|__pugs|Bearer/.test(x)), JSON.stringify(ident));
+const pickRes = await fetch(`${base}/api/credential-pick`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-proxy-token': proxyToken }, body: JSON.stringify({ pan: 'quark', operation: 'download' }) });
+const pick = await pickRes.json();
+check('credential-pick（新词表 download）命中账号', pickRes.ok && typeof pick.tag === 'string' && Boolean(pick.kind), JSON.stringify({ status: pickRes.status, tag: pick.tag, kind: pick.kind }));
+const legacyRes = await fetch(`${base}/api/proxy/cookie-pick`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-proxy-token': proxyToken }, body: JSON.stringify({ pan: 'quark', operation: 'prase' }) });
+check('旧路径 /api/proxy/cookie-pick 兼容（legacy operation=prase）', legacyRes.ok);
+const noAccRes = await fetch(`${base}/api/credential-pick`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-proxy-token': proxyToken }, body: JSON.stringify({ pan: 'nosuchpan', operation: 'download' }) });
+check('credential-pick 无可用账号 → 404', noAccRes.status === 404);
 r = await fetch(`${base}/api/web/hosts`, { headers: { 'x-webui-token': webuiToken } });
 const hosts = await r.json();
 check('hosts list 包含新增', hosts.hosts?.some((h) => h.host === 'drive.quark.cn'));

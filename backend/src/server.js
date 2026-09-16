@@ -22,8 +22,11 @@ import { log, listLogs, clearRing } from './log.js';
 import { hostAllowed, originAllowed, verifyWebuiToken, createCsrf, verifyCsrf, verifyProxyToken } from './auth.js';
 import { handleProxy } from './proxy.js';
 import { getWranglerHealth } from './wrangler.js';
+import { listPresets, runPreset, browserHealth } from './presets.js';
 import {
   listAccounts, getAccount, upsertAccount, deleteAccount, countByPan, pickAccountForPan,
+  listAccountIdentities,
+  sweepTempAccounts,
 } from './cookies.js';
 import {
   authorizeTerminalWs, handleTerminalMessage, newTerminalSessionId,
@@ -165,15 +168,17 @@ async function handleCookiePick(req, res) {
       return;
     }
     const pan = String(body.pan ?? '').trim();
-    const operation = String(body.operation ?? 'prase');
+    // v1.3.1 四类词表：新客户端发 download（旧名 prase 仍兼容）
+    const rawOp = String(body.operation ?? 'download');
+    const operation = rawOp === 'prase' ? 'download' : rawOp;
     if (!pan) {
       json(res, 400, { error: 'BAD_REQUEST', message: '缺少 pan' }, PROXY_CORS);
       return;
     }
     let hit = pickAccountForPan(pan, operation);
-    if (!hit && operation === 'prase') {
+    if (!hit && operation === 'download') {
       // 无任何账号（正式 + guest 都没有）→ 自动生成 guest 占位（随机 __pugs，label guest#xxx 可追溯）
-      // 与 webui 新增游客账号同源；只对 prase 生效（scan 不注入登录态，保持 404）
+      // 与 webui 新增游客账号同源；只对 download 生效（scan 不注入登录态，保持 404）
       try {
         upsertAccount({ pan, kind: 'guest', cookieString: '' }, 'cookie-pick');
         hit = pickAccountForPan(pan, operation);
@@ -185,14 +190,98 @@ async function handleCookiePick(req, res) {
       json(res, 404, { error: 'NO_ACCOUNT', message: `pan=${pan} 无可用账号（含 guest 兜底）` }, PROXY_CORS);
       return;
     }
-    audit('proxy.cookie-pick', `${pan}/${operation} → ${hit.tag}`, 'hop');
+    audit('proxy.credential-pick', `${pan}/${operation} → ${hit.tag}`, 'hop');
     json(res, 200, { cookie: hit.cookieString, account_id: hit.account.id, tag: hit.tag, kind: hit.account.kind }, PROXY_CORS);
   } catch (err) {
     json(res, 500, { error: 'INTERNAL', message: err.message }, PROXY_CORS);
   }
 }
 
+/**
+ * v1.3.1 四类路由 · credential-pick 的**身份查询**端点（Tzz D2/B3）：
+ * GET /api/credential-pick/accounts?provider=<pan>&account=<身份> → { accounts: string[] }
+ * - 只回**非敏感身份**（JWT 的 userId；解不出时 drive:<drive_id>；再不行退账号标签）—— 凭据本体永不出接口
+ * - X-Proxy-Token 鉴权 + 简单限频（防被拿来刷探测）+ no-store
+ * - 供 functions 的 /api/credential-pick 调用（SPA 不经手凭据；D1 后续接入滚动更新探测）
+ */
+const identityProbeHits = new Map(); // ip -> number[]（时间戳）
+const IDENTITY_PROBE_PER_MIN = 30;
+
+function identityProbeLimited(clientIp) {
+  const now = Date.now();
+  const arr = (identityProbeHits.get(clientIp) ?? []).filter((t) => now - t < 60_000);
+  arr.push(now);
+  identityProbeHits.set(clientIp, arr);
+  return arr.length > IDENTITY_PROBE_PER_MIN;
+}
+
+async function handleCredentialPickAccounts(req, res, clientIp) {
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, PROXY_CORS);
+    res.end();
+    return;
+  }
+  if (req.method !== 'GET') {
+    json(res, 404, { error: 'NOT_FOUND', message: '仅 GET /api/credential-pick/accounts' }, PROXY_CORS);
+    return;
+  }
+  if (!verifyProxyToken(req.headers['x-proxy-token'] ?? '')) {
+    json(res, 401, { error: 'UNAUTHORIZED', message: 'X-Proxy-Token 无效' }, PROXY_CORS);
+    return;
+  }
+  if (identityProbeLimited(clientIp)) {
+    json(res, 429, { error: 'RATE_LIMITED', message: `身份探测限频 ${IDENTITY_PROBE_PER_MIN}/min` }, PROXY_CORS);
+    return;
+  }
+  const u = new URL(req.url, 'http://x');
+  const provider = String(u.searchParams.get('provider') ?? '').trim();
+  const wanted = String(u.searchParams.get('account') ?? '').trim();
+  const identities = listAccountIdentities(provider || null);
+  const accounts = wanted ? identities.filter((x) => x === wanted) : identities;
+  json(res, 200, { accounts, provider: provider || null }, { ...PROXY_CORS, 'cache-control': 'no-store' });
+}
+
 /* ================= webui API 路由 ================= */
+
+/**
+ * v1.3.1 账号快照（读写分离的另一半）：
+ * 面板只读这份**服务端缓存**（5min 自动刷新 + 写操作后立即刷新 + 手动刷新端点），
+ * 字段白名单在 listAccounts（无凭据、无指纹）；面板因此没有「按字段查库」的能力。
+ */
+let accountsSnap = { at: 0, data: null };
+
+function refreshAccountsSnapshot() {
+  accountsSnap = { at: Date.now(), data: { accounts: listAccounts(), counts: countByPan() } };
+  return accountsSnap;
+}
+
+function accountsSnapshot() {
+  if (!accountsSnap.data) refreshAccountsSnapshot();
+  return accountsSnap;
+}
+
+/** 5min 定时：刷快照 + 清扫到期临时账号（只清凭据、审计保留） */
+function startAccountsTicker() {
+  const tick = () => {
+    try {
+      refreshAccountsSnapshot();
+    } catch (err) {
+      log('warn', `账号快照刷新失败：${err.message}`);
+    }
+    try {
+      for (const r of sweepTempAccounts()) {
+        audit('account.temp-expired', `${r.pan}/${r.label || `id=${r.id}`}（临时凭据到期，已清除；审计保留）`, 'backend');
+        log('info', `账号池：临时凭据到期已清除（${r.pan}/${r.label || r.id}）`);
+      }
+      if (accountsSnap.data) refreshAccountsSnapshot();
+    } catch (err) {
+      log('warn', `临时账号清扫失败：${err.message}`);
+    }
+  };
+  tick();
+  const timer = setInterval(tick, 5 * 60_000);
+  if (typeof timer.unref === 'function') timer.unref();
+}
 
 /** webui 鉴权中间件：Host/Origin/令牌/CSRF（GET 免 CSRF） */
 function webAuth(req, body) {
@@ -317,7 +406,9 @@ async function handleWebApi(req, res, pathname, body) {
     const dayKey = (ts) => new Date(ts).toISOString().slice(0, 10);
     const buckets = new Map();
     for (const r of rows) {
-      const k = `${dayKey(r.ts)}|${r.pan ?? '?'}|${r.operation}`;
+      // v1.3.1 四类词表：历史 `prase` 读作 download（旧行无法再细分转存/取直链）
+      const op = r.operation === 'prase' ? 'download' : (r.operation ?? 'other');
+      const k = `${dayKey(r.ts)}|${r.pan ?? '?'}|${op}`;
       buckets.set(k, (buckets.get(k) ?? 0) + 1);
     }
     const daysArr = [];
@@ -327,7 +418,7 @@ async function handleWebApi(req, res, pathname, body) {
       for (const [k, n] of buckets) {
         const [day, pan, op] = k.split('|');
         if (day !== d) continue;
-        byPan[pan] ??= { scan: 0, prase: 0, other: 0, total: 0 };
+        byPan[pan] ??= { scan: 0, download: 0, restore: 0, 'credential-pick': 0, other: 0, total: 0 };
         byPan[pan][op] = (byPan[pan][op] ?? 0) + n;
         byPan[pan].total += n;
       }
@@ -402,30 +493,77 @@ async function handleWebApi(req, res, pathname, body) {
     return send(200, { ok: true, days, deleted });
   }
 
-  // ---- 账号池（kind：real | guest） ----
+  // ---- 账号池（kind：real | guest）—— v1.3.1 读写分离 ----
+  // 读：只给**服务端快照**（5min 自动刷新 + 写后即刷），字段白名单在 listAccounts（无凭据、无指纹）
+  // 写：POST/DELETE 都要求**二次确认令牌**（body.confirmToken，服务端真校验，不只是前端拦）
   if (pathname === '/api/web/accounts' && req.method === 'GET') {
-    return send(200, { accounts: listAccounts(), counts: countByPan() });
+    const snap = accountsSnapshot();
+    return send(200, { ...snap.data, snapshotAt: snap.at });
+  }
+  if (pathname === '/api/web/accounts/refresh' && req.method === 'POST') {
+    refreshAccountsSnapshot();
+    audit('account.snapshot-refresh', '手动刷新账号快照', 'webui');
+    return send(200, { ok: true, snapshotAt: accountsSnapshot().at });
   }
   if (pathname === '/api/web/accounts' && req.method === 'POST') {
+    if (!verifyWebuiToken(String(body?.confirmToken ?? ''))) {
+      return send(403, { error: 'CONFIRM_REQUIRED', message: '账号池属高危操作：请二次输入 WebUI 令牌' });
+    }
     try {
-      const id = upsertAccount(body, 'webui');
-      audit('account.upsert', `${body?.pan ?? '?'}/${body?.label ?? ''}（${body?.kind ?? 'real'}）`, 'webui');
-      log('info', `账号池：${body?.pan ?? '?'} ${body?.kind === 'guest' ? '游客' : '账号'}已保存（${body?.label ?? ''}）`);
+      const ttlDefault = Number(getSetting('account_temp_ttl_minutes') ?? 30);
+      const isTemp = body?.temp === true;
+      const id = upsertAccount(
+        { ...body, ttlMinutes: isTemp ? Number(body?.ttlMinutes) || ttlDefault : null },
+        'webui',
+      );
+      refreshAccountsSnapshot();
+      // 审计里的标识：备注 → 身份（userId）；都不用 #num（Tzz 定稿）
+      const saved = accountsSnapshot().data.accounts.find((x) => x.id === id) ?? null;
+      const who = saved?.label || saved?.userId || `id=${id}`;
+      audit('account.upsert', `${body?.pan ?? '?'}/${who}（${body?.kind ?? 'real'}${isTemp ? '，临时' : ''}）`, 'webui');
+      log('info', `账号池：${body?.pan ?? '?'} ${body?.kind === 'guest' ? '游客' : '账号'}已保存${isTemp ? '（临时写入）' : ''}`);
       return send(200, { ok: true, id });
     } catch (err) {
       return send(400, { error: 'BAD_ACCOUNT', message: err.message });
     }
   }
+  // v1.3.1：编辑不再回填凭据（写新不读旧）—— 只回非敏感元数据
   if (pathname.startsWith('/api/web/accounts/') && req.method === 'GET') {
-    const a = getAccount(Number(pathname.split('/')[4]));
+    const id = Number(pathname.split('/')[4]);
+    const a = accountsSnapshot().data.accounts.find((x) => x.id === id);
     if (!a) return send(404, { error: 'NOT_FOUND' });
-    return send(200, { account: { id: a.id, pan: a.pan, label: a.label, kind: a.kind, expiresAt: a.expires_at, status: a.status, cookieString: a.cookie_enc ? undefined : '' } });
+    return send(200, { account: a, credentialRefillable: false });
   }
   if (pathname.startsWith('/api/web/accounts/') && req.method === 'DELETE') {
-    deleteAccount(Number(pathname.split('/')[4]), 'webui');
+    if (!verifyWebuiToken(String(body?.confirmToken ?? ''))) {
+      return send(403, { error: 'CONFIRM_REQUIRED', message: '删除账号池属高危操作：请二次输入 WebUI 令牌' });
+    }
+    const id = Number(pathname.split('/')[4]);
+    const before = accountsSnapshot().data.accounts.find((x) => x.id === id) ?? null;
+    deleteAccount(id, 'webui');
+    refreshAccountsSnapshot();
+    // 审计带上身份（备注缺失时用 userId，不用 #num）
+    audit('account.delete', `${before?.pan ?? '?'}/${before?.label || before?.userId || `id=${id}`}`, 'webui');
     return send(200, { ok: true });
   }
 
+  // ---- 凭据刷新预设（v1.3.1 P4：**手动触发**，不做自动执行；写操作要二次令牌） ----
+  if (pathname === '/api/web/plugins' && req.method === 'GET') {
+    const health = await browserHealth();
+    return send(200, {
+      plugins: listPresets(),
+      browser: health,
+      note: '凭据刷新走真实浏览器（CDP 9222）：手动点运行、按预设限频；凭据只进加密库，不回面板',
+    });
+  }
+  if (pathname.startsWith('/api/web/plugins/') && pathname.endsWith('/run') && req.method === 'POST') {
+    const id = decodeURIComponent(pathname.split('/')[4] ?? '');
+    if (!verifyWebuiToken(String(body?.confirmToken ?? ''))) {
+      return send(403, { error: 'CONFIRM_REQUIRED', message: '运行凭据刷新会写账号池：请二次输入 WebUI 令牌' });
+    }
+    const r = await runPreset(id, 'webui');
+    return send(r.ok ? 200 : 429, r);
+  }
   // ---- hosts 映射（只增不减：只有 list + add，无删除端点） ----
   if (pathname === '/api/web/hosts' && req.method === 'GET') {
     return send(200, { hosts: listHosts() });
@@ -446,6 +584,9 @@ async function handleWebApi(req, res, pathname, body) {
       notify: cfg.notify,
       advanced: cfg.advanced,
       logRetentionDays: Number(getSetting('log_retention_days') ?? 30), // v1.2.2 §2.3（重启后生效）
+      // v1.3.1：临时写入默认 TTL（分钟；面板勾选「临时」时使用，可自行填写覆盖）+ trace 文件明细粒度
+      accountTempTtlMinutes: Number(getSetting('account_temp_ttl_minutes') ?? 30),
+      traceFileDetail: String(getSetting('trace_file_detail') ?? 'full'),
       // 只读说明：白名单/限频在 functions/api/proxy.js（单一实现），backend 不重复维护
       policy: { whitelist: 'functions/api/proxy.js → ALLOWED_HOST_SUFFIXES', rateLimit: 'proxy.js 内置 60/min/IP', owner: 'proxy.js' },
     });
@@ -467,6 +608,23 @@ async function handleWebApi(req, res, pathname, body) {
       setSetting('log_retention_days', String(Math.round(n)));
       audit('settings.retention', `日志保留期 ${n} 天（重启后生效）`, 'webui');
       log('info', `settings：日志保留期 → ${n} 天（重启后生效）`);
+    }
+    // v1.3.1：临时写入默认 TTL（分钟；面板可自行填写覆盖）
+    if (b.account_temp_ttl_minutes !== undefined) {
+      const n = Number(b.account_temp_ttl_minutes);
+      if (!Number.isFinite(n) || n < 1 || n > 10080) return send(400, { error: 'BAD_REQUEST', message: 'account_temp_ttl_minutes 必须是 1–10080（一周）的整数' });
+      setSetting('account_temp_ttl_minutes', String(Math.round(n)));
+      audit('settings.temp-ttl', `临时凭据默认 TTL ${Math.round(n)} 分钟`, 'webui');
+      log('info', `settings：临时凭据默认 TTL → ${Math.round(n)} 分钟`);
+    }
+    // v1.3.1 隐私：trace 文件明细粒度（full=名称+大小+哈希 / safe=只留大小 / off=不记）
+    // 背景（Tzz 审阅）：名称+大小+哈希足以对上游撞库反查文件，共享部署请考虑 safe/off
+    if (b.trace_file_detail !== undefined) {
+      const v = String(b.trace_file_detail);
+      if (!['full', 'safe', 'off'].includes(v)) return send(400, { error: 'BAD_REQUEST', message: 'trace_file_detail 必须是 full / safe / off' });
+      setSetting('trace_file_detail', v);
+      audit('settings.trace-detail', `trace 文件明细 → ${v}`, 'webui');
+      log('info', `settings：trace 文件明细粒度 → ${v}`);
     }
     saveConfig();
     return send(200, { ok: true });
@@ -617,9 +775,16 @@ export async function startServers() {
       if (pathname === '/api/proxy') {
         return await handleProxyRoute(req, res, clientIp);
       }
-      // 云端取号（X-Proxy-Token 鉴权；v1.2.2 §4）
+      // 云端取号（X-Proxy-Token 鉴权；v1.3.1 改名 credential-pick，旧路径保留一版）
+      if (pathname === '/api/credential-pick') {
+        return await handleCookiePick(req, res);
+      }
       if (pathname === '/api/proxy/cookie-pick') {
         return await handleCookiePick(req, res);
+      }
+      // 账号身份查询（只回非敏感身份；供 functions 的 /api/credential-pick 调用）
+      if (pathname === '/api/credential-pick/accounts') {
+        return await handleCredentialPickAccounts(req, res, clientIp);
       }
       // webui API
       if (pathname.startsWith('/api/web/')) {
@@ -657,7 +822,8 @@ export async function startServers() {
     server.once('error', reject);
     server.listen(cfg.proxy.port, cfg.proxy.host, () => resolve(server));
   });
-  log('info', `单 listener：http://${cfg.proxy.host}:${cfg.proxy.port}（/api/proxy + /api/proxy-config + /api/web/* + 静态）`, { console: true });
-  log('info', `wrangler：${cfg.wrangler.autoSpawn ? 'autoSpawn（未监听时自动拉起）' : 'attach 模式'}，转发目标 http://127.0.0.1:${cfg.wrangler.port}/api/proxy`);
+  log('info', `单 listener：http://${cfg.proxy.host}:${cfg.proxy.port}（/api/<四类> + /api/proxy-config + /api/web/* + 静态）`, { console: true });
+  startAccountsTicker(); // 账号快照 5min 刷新 + 到期临时凭据清扫
+  log('info', `wrangler：${cfg.wrangler.autoSpawn ? 'autoSpawn（未监听时自动拉起）' : 'attach 模式'}，转发目标 http://127.0.0.1:${cfg.wrangler.port}/api/<四类>（旧部署回退 /api/proxy）`);
   return server;
 }

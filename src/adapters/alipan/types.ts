@@ -67,6 +67,8 @@ export const ERROR_MESSAGES: Record<string, string> = {
   // 登录态失效（get_download_url / batch 401 body.code）—— 提示重新填写即可，别的不用动
   AccessTokenInvalid: 'auth 已过期，请重新填写（回 alipan.com 重新复制 Authorization）',
   AccessTokenExpired: 'auth 已过期，请重新填写（回 alipan.com 重新复制 Authorization）',
+  // 转存副本已失效（存过又删了）—— 正常情况下不会展示：carry 会自动回退重新转存
+  ForbiddenFileInTheRecycleBin: '此前转存的文件已在回收站（副本被清了），已自动重新转存',
 };
 
 /** 转存内层错误码 → 友好中文（无映射时 fallback 到上游 message 兜底，scanner 里内联） */
@@ -99,7 +101,7 @@ export const ALIPAN_CARRY_MESSAGES = {
   otherUserHint: '换号了？再存一次哦',
 } as const;
 
-/** 滚动更新缓存存储键（见 carry.ts；与 pan-web:alipan-auth:v1 同域同风格，便于一起清理/审计） */
+/** 滚动更新存储键（v1.3.1：统一记录 —— 凭据 + 上次账号 + 转存映射丢一起，见 auth.ts/carry.ts） */
 export const ALIPAN_CARRY_STORAGE_KEY = 'pan-web:alipan-carry:v1';
 
 /**
@@ -107,6 +109,36 @@ export const ALIPAN_CARRY_STORAGE_KEY = 'pan-web:alipan-carry:v1';
  * 上游 401 body.code（见 ERROR_MESSAGES）；批量转存内层与 get_download_url 都会出现。
  */
 export const ALIPAN_CARRY_EXPIRED_CODES: readonly string[] = ['AccessTokenInvalid', 'AccessTokenExpired'];
+
+/**
+ * 「转存副本已失效」的业务码（Tzz 实测：403 ForbiddenFileInTheRecycleBin —— 存过又删了）。
+ * 命中这些码时不视为致命错误：carry 直接回退到**重新转存**并刷新本地记录（见 carry.ts / scanner.ts）。
+ */
+export const ALIPAN_CARRY_STALE_CODES: readonly string[] = [
+  'ForbiddenFileInTheRecycleBin',
+  'NotFound_File',
+  'FileNotFound',
+];
+
+/* ============================== v1.3.1 凭据快捷更新 ============================== */
+
+/**
+ * 账号变化确认弹窗话术（Tzz 定稿原文；阿里云盘**特设、强制开启**，注册在结果页）。
+ * 仅当本次解析与上次使用的账号不同才出现（可能后端删了上次账号导致随机抽号，也可能两次人工输入混乱）：
+ * 选「是」= 覆盖暂存记录（换号则作废旧账号的转存映射）；选「否」= 本次输入仅本次有效（内存态）。
+ */
+export const ALIPAN_ACCOUNT_SWITCH_PROMPT = {
+  title: '是否覆盖当前暂存区的 userid',
+  context: '账号信息复用包含 userid 的临时 auth，对应 drive_id 和 to_parent_file_id',
+  confirm: '是',
+  cancel: '否',
+} as const;
+
+/**
+ * 必填项缺失提示前缀（A2：CookieInputModal 的小字把它改成「缺少必填项：xx」，
+ * 底部「保存并重试」直接置灰）。
+ */
+export const ALIPAN_MISSING_FIELDS_HINT = '缺少必填项：';
 
 /**
  * hop 探测（滚动更新触发判据；**后端尚未实现**，v1.3 占位）：

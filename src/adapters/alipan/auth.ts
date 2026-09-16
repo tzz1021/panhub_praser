@@ -21,9 +21,157 @@
  * 键值顺序固定（auth 在最前），值内部允许出现 `;`（如 UA 的 `(X11; Linux x86_64)`）——
  * 因此解析用「已知键标记定位」而不是朴素 split(';')，保证 UA 原样还原。
  *
- * 存储：localStorage 'pan-web:alipan-auth:v1'，完整凭据串。
+ * 存储（v1.3.1 定稿）：凭据与滚动更新映射**合并存一份记录**（Tzz：与其单独存储不如丢一起）——
+ * 键 `pan-web:alipan-carry:v1`，形态见 `AlipanStoreRecord`（lastUserId/lastAuth/drive_id/
+ * to_parent_file_id/updateAt/files）；旧键 `pan-web:alipan-auth:v1`（v1.2.x 纯凭据串）**只读兼容**，
+ * 首次读取时自动搬进新记录。滚动更新/合并写入/账号判定的逻辑在 carry.ts（本文件只管存取与解析）。
+ * 内存态凭据（选「否」= 仅本次有效）不进 localStorage：见 setAlipanSessionAuth。
  */
-const STORAGE_KEY = 'pan-web:alipan-auth:v1';
+/** 旧键（v1.2.x 纯凭据串）；只读兼容，读到即搬进 ALIPAN_STORE_KEY */
+const LEGACY_STORAGE_KEY = 'pan-web:alipan-auth:v1';
+/** v1.3.1 统一存储键（凭据 + 上次使用的账号 + 转存映射；见 carry.ts） */
+export const ALIPAN_STORE_KEY = 'pan-web:alipan-carry:v1';
+
+/**
+ * 统一存储记录（Tzz 定稿伪代码：不再分键值对，updateAt 用于找到上次使用的账号）。
+ * files = 原分享 file_id → 转存后 file_id（滚动更新用；有映射则只发 download 不发 restore）。
+ */
+export interface AlipanStoreRecord {
+  /** 上次使用的账号身份（JWT userId；解不出时 `drive:<drive_id>` 降级） */
+  lastUserId: string;
+  /** 上次使用的凭据串（原样，便于下次粘贴对比/合并回填） */
+  lastAuth: string;
+  /** 上次使用的账号 drive_id（转存显式 to_drive_id / 取直链用） */
+  driveId?: string;
+  /** 上次使用的转存目标目录 file_id */
+  toParentFileId?: string;
+  /** 最近一次写入时间 ms（“上次使用的账号”判定） */
+  updateAt: number;
+  /** 原分享 file_id → 转存后 file_id */
+  files: Record<string, string>;
+}
+
+/** 内存态凭据（选「否」= 仅本次有效）：刷新即失效，不写 localStorage、不进后端统计 */
+let sessionAuth: string | null = null;
+
+/** 设置内存态凭据（传 null = 清除；仅在本次页面生命周期内生效） */
+export function setAlipanSessionAuth(authString: string | null): void {
+  const clean = (authString ?? '').trim();
+  sessionAuth = clean || null;
+}
+
+/** 当前是否有内存态凭据 */
+export function hasAlipanSessionAuth(): boolean {
+  return Boolean(sessionAuth);
+}
+
+/** 读取统一存储记录；无/损坏返回 null（读到旧键则就地迁移） */
+export function readAlipanStore(): AlipanStoreRecord | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(ALIPAN_STORE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<AlipanStoreRecord> | null;
+      if (parsed && typeof parsed.lastAuth === 'string') {
+        const files: Record<string, string> = {};
+        const src = parsed.files && typeof parsed.files === 'object' ? (parsed.files as Record<string, unknown>) : {};
+        for (const [k, v] of Object.entries(src)) if (typeof v === 'string' && v) files[k] = v;
+        return {
+          lastUserId: typeof parsed.lastUserId === 'string' ? parsed.lastUserId : '',
+          lastAuth: parsed.lastAuth,
+          driveId: typeof parsed.driveId === 'string' && parsed.driveId ? parsed.driveId : undefined,
+          toParentFileId: typeof parsed.toParentFileId === 'string' && parsed.toParentFileId ? parsed.toParentFileId : undefined,
+          updateAt: typeof parsed.updateAt === 'number' ? parsed.updateAt : 0,
+          files,
+        };
+      }
+    }
+    // 旧键迁移（v1.2.x → v1.3.1）：把纯凭据串搬进统一记录，旧键删除
+    const legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacy && legacy.trim()) {
+      const parsed = parseAlipanAuthString(legacy.trim());
+      const rec: AlipanStoreRecord = {
+        lastUserId: '',
+        lastAuth: legacy.trim(),
+        driveId: parsed.driveId,
+        toParentFileId: parsed.toParentFileId || undefined,
+        updateAt: Date.now(),
+        files: {},
+      };
+      writeAlipanStore(rec);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      return rec;
+    }
+    return null;
+  } catch {
+    return null; // 解析失败按「无记录」处理，不影响主流程
+  }
+}
+
+/** 写入统一存储记录（null = 清除；files 上限由 carry.ts 负责） */
+export function writeAlipanStore(rec: AlipanStoreRecord | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!rec || !rec.lastAuth) {
+      window.localStorage.removeItem(ALIPAN_STORE_KEY);
+      return;
+    }
+    window.localStorage.setItem(ALIPAN_STORE_KEY, JSON.stringify(rec));
+  } catch {
+    // 配额/隐私模式异常静默
+  }
+}
+
+/** 局部更新统一记录（浅合并；记录不存在时以 patch 为准新建） */
+export function patchAlipanStore(patch: Partial<AlipanStoreRecord>): AlipanStoreRecord | null {
+  const prev = readAlipanStore();
+  const next: AlipanStoreRecord = {
+    lastUserId: patch.lastUserId ?? prev?.lastUserId ?? '',
+    lastAuth: patch.lastAuth ?? prev?.lastAuth ?? '',
+    driveId: patch.driveId ?? prev?.driveId,
+    toParentFileId: patch.toParentFileId ?? prev?.toParentFileId,
+    updateAt: patch.updateAt ?? Date.now(),
+    files: patch.files ?? prev?.files ?? {},
+  };
+  if (!next.lastAuth) return prev;
+  writeAlipanStore(next);
+  return next;
+}
+
+/** 清除统一记录（凭据 + 转存映射一并清） */
+export function clearAlipanStore(): void {
+  writeAlipanStore(null);
+}
+
+/** 读取当前生效的 alipan 凭据串；优先级：内存态（仅本次有效） > 统一记录 > 旧键；无则 '' */
+export function getAlipanAuthString(): string {
+  if (typeof window === 'undefined') return sessionAuth ?? '';
+  if (sessionAuth) return sessionAuth;
+  const rec = readAlipanStore();
+  if (rec?.lastAuth) return rec.lastAuth.trim();
+  try {
+    const v = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    return typeof v === 'string' ? v.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+/** 写入 alipan 凭据串（空串 = 清除；保留 files 转存映射与上次账号字段） */
+export function setAlipanAuthString(authString: string): void {
+  const clean = (authString ?? '').trim();
+  if (!clean) {
+    clearAlipanStore();
+    return;
+  }
+  const parsed = parseAlipanAuthString(clean);
+  patchAlipanStore({
+    lastAuth: clean,
+    driveId: parsed.driveId,
+    toParentFileId: parsed.toParentFileId || undefined,
+    updateAt: Date.now(),
+  });
+}
 
 /** 凭据串关键键（弹窗展示/校验用；整串模式下自动检测；顺序 = 推荐书写顺序） */
 export const ALIPAN_AUTH_KEYS = ['auth', 'drive_id', 'to_parent_file_id', 'user-agent', 'x-device-id'] as const;
@@ -40,29 +188,6 @@ export interface AlipanAuth {
   userAgent?: string;
   /** x-device-id（可选；缺省不带） */
   xDeviceId?: string;
-}
-
-/** 读取当前保存的 alipan 凭据串；无/损坏返回 '' */
-export function getAlipanAuthString(): string {
-  if (typeof window === 'undefined') return '';
-  try {
-    const v = window.localStorage.getItem(STORAGE_KEY);
-    return typeof v === 'string' ? v.trim() : '';
-  } catch {
-    return '';
-  }
-}
-
-/** 写入 alipan 凭据串（空串 = 清除） */
-export function setAlipanAuthString(authString: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const clean = (authString ?? '').trim();
-    if (clean) window.localStorage.setItem(STORAGE_KEY, clean);
-    else window.localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // 配额/隐私模式异常静默
-  }
 }
 
 /**

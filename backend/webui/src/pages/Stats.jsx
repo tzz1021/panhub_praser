@@ -169,7 +169,7 @@ export default function Stats({ toast }) {
             </div>
             <table className="tbl" style={{ marginTop: 12 }}>
               <thead>
-                <tr><th>日期</th><th>网盘</th><th>scan</th><th>prase</th><th>其他</th><th>合计</th></tr>
+                <tr><th>日期</th><th>网盘</th><th>scan</th><th>download</th><th>restore</th><th>credential-pick</th><th>其他</th><th>合计</th></tr>
               </thead>
               <tbody>
                 {stats.days.flatMap((d) => {
@@ -179,7 +179,7 @@ export default function Stats({ toast }) {
                     <tr key={`${d.day}-${pan}`}>
                       <td>{d.day}</td>
                       <td><span className="tag gray">{pan}</span></td>
-                      <td>{p.scan ?? 0}</td><td>{p.prase ?? 0}</td><td>{p.other ?? 0}</td>
+                      <td>{p.scan ?? 0}</td><td>{p.download ?? 0}</td><td>{p.restore ?? 0}</td><td>{p['credential-pick'] ?? 0}</td><td>{p.other ?? 0}</td>
                       <td><b>{p.total}</b></td>
                     </tr>
                   ));

@@ -28,10 +28,13 @@ function keysPresent(cookieString, pan) {
   });
 }
 
-function AccountForm({ initial, panKeys, onDone, toast }) {
+function AccountForm({ initial, panKeys, onDone, toast, ttlDefault = 30 }) {
   const [pan, setPan] = useState(initial?.pan ?? 'quark');
   const [label, setLabel] = useState(initial?.label ?? '');
-  const [cookieString, setCookieString] = useState(initial?.cookieString ?? '');
+  // v1.3.1：编辑**不回填凭据**（写新不读旧）；保存即覆盖，留空会被服务端拒绝
+  const [cookieString, setCookieString] = useState('');
+  const [isTemp, setIsTemp] = useState(Boolean(initial?.isTemp));
+  const [ttlMinutes, setTtlMinutes] = useState(initial?.ttlMinutes ?? ttlDefault);
   const [expiresAt, setExpiresAt] = useState(initial?.expiresAt ? new Date(initial.expiresAt).toISOString().slice(0, 16) : '');
   const [confirmToken, setConfirmToken] = useState('');
   const [busy, setBusy] = useState(false);
@@ -51,6 +54,8 @@ function AccountForm({ initial, panKeys, onDone, toast }) {
         label,
         cookieString,
         expiresAt: expiresAt ? new Date(expiresAt).getTime() : null,
+        temp: isTemp, // v1.3.1：临时写入（到期自动清除凭据，审计保留）
+        ttlMinutes: Number(ttlMinutes) || undefined,
       },
       confirmToken: confirmToken.trim(),
     });
@@ -65,7 +70,12 @@ function AccountForm({ initial, panKeys, onDone, toast }) {
 
   return (
     <div className="card" style={{ borderColor: 'var(--primary)' }}>
-      <h3>{initial ? `编辑账号 #${initial.id}` : '添加账号'}</h3>
+      <h3>{initial ? `覆盖写入账号（${initial.label || initial.userId || `#${initial.id}`}）` : '添加账号'}</h3>
+      {initial && (
+        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+          出于安全**不回填**已有凭据（写新不读旧）：请粘贴新凭据后保存（保存即覆盖）。
+        </p>
+      )}
       <div className="row" style={{ marginBottom: 8 }}>
         <select className="input" style={{ width: 130 }} value={pan} onChange={(e) => { setPan(e.target.value); setCookieString(''); }}>
           <option value="quark">quark（夸克）</option>
@@ -90,6 +100,24 @@ function AccountForm({ initial, panKeys, onDone, toast }) {
       <div className="row" style={{ marginTop: 10 }}>
         <input className="input mono" style={{ width: 210 }} type="datetime-local" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} />
         <span className="muted">过期时间（可空）</span>
+      </div>
+      {/* v1.3.1：临时写入（Tzz：临时写入算新号，按时清除凭据、审计保留；TTL 可自己写） */}
+      <div className="row" style={{ marginTop: 10, alignItems: 'center' }}>
+        <label className="row" style={{ fontSize: 13, gap: 6 }}>
+          <input type="checkbox" checked={isTemp} onChange={(e) => setIsTemp(e.target.checked)} />
+          临时写入（到期自动清除凭据，审计保留）
+        </label>
+        <input
+          className="input mono"
+          style={{ width: 90 }}
+          type="number"
+          min="1"
+          max="10080"
+          value={ttlMinutes}
+          disabled={!isTemp}
+          onChange={(e) => setTtlMinutes(Number(e.target.value))}
+        />
+        <span className="muted">分钟（默认 {ttlDefault}；不同上游过期时间不同，过期前清掉即可）</span>
       </div>
       <div className="row" style={{ marginTop: 10 }}>
         <input className="input mono grow" type="password" placeholder="二次确认：输入 WebUI 令牌" value={confirmToken} onChange={(e) => setConfirmToken(e.target.value)} />
@@ -120,9 +148,13 @@ export default function Settings({ toast }) {
   useEffect(() => { loadAccounts(); loadSettings(); }, []);
 
   const removeAccount = async (a) => {
-    if (!window.confirm(`删除账号 ${a.pan}/${a.label || a.id}？`)) return;
-    const r = await api(`/api/web/accounts/${a.id}`, { method: 'DELETE', body: {} });
+    if (!window.confirm(`删除账号 ${a.pan}/${a.label || a.userId || a.id}？`)) return;
+    // v1.3.1：删除与写入同级高危 —— 服务端要二次确认令牌（秘钥语义，不只是前端拦）
+    const confirmToken = window.prompt('删除属高危操作：请输入 WebUI 令牌确认');
+    if (!confirmToken) return;
+    const r = await api(`/api/web/accounts/${a.id}`, { method: 'DELETE', body: {}, confirmToken: confirmToken.trim() });
     if (r.ok) { toast('账号已删除', 'ok'); loadAccounts(); }
+    else toast(r.data?.message ?? '删除失败', 'err');
   };
 
   /* ---------- 通知 / 高级 ---------- */
@@ -185,6 +217,7 @@ export default function Settings({ toast }) {
               <div style={{ marginTop: 12 }}>
                 <AccountForm
                   initial={form === 'new' ? null : form}
+                  ttlDefault={Number(settings.accountTempTtlMinutes ?? 30)}
                   panKeys={PAN_KEYS}
                   onDone={(changed) => { setForm(null); if (changed) loadAccounts(); }}
                   toast={toast}
@@ -193,7 +226,7 @@ export default function Settings({ toast }) {
             )}
             <table className="tbl" style={{ marginTop: 12 }}>
               <thead>
-                <tr><th>ID</th><th>网盘</th><th>备注</th><th>状态</th><th>关键 key</th><th>cookie</th><th>过期</th><th>最近使用</th><th>操作</th></tr>
+                <tr><th>ID</th><th>网盘</th><th>备注</th><th>状态</th><th>账号身份（userId）</th><th>过期</th><th>临时到期</th><th>最近使用</th><th>操作</th></tr>
               </thead>
               <tbody>
                 {accounts.accounts.map((a) => (
@@ -202,16 +235,13 @@ export default function Settings({ toast }) {
                     <td><span className="tag gray">{a.pan}</span></td>
                     <td>{a.label || <span className="muted">-</span>}</td>
                     <td><span className={`tag ${a.status === 'ok' ? '' : 'red'}`}>{a.status}</span></td>
-                    <td className="mono">{a.keys.join(' / ') || '-'}</td>
-                    <td className="mono">{a.cookieLength} 字符 …{a.cookieTail}</td>
+                    <td className="mono" style={{ fontSize: 12 }}>{a.userId || <span className="muted">-</span>}</td>
                     <td className="mono">{a.expiresAt ? fmtTime(a.expiresAt) : <span className="muted">-</span>}</td>
+                    <td className="mono">{a.tempExpiresAt ? fmtTime(a.tempExpiresAt) : <span className="muted">-</span>}</td>
                     <td className="mono">{a.lastUsedAt ? fmtTime(a.lastUsedAt) : <span className="muted">-</span>}</td>
                     <td>
                       <div className="row" style={{ gap: 4 }}>
-                        <button className="btn btn-sm" onClick={async () => {
-                          const r = await api(`/api/web/accounts/${a.id}`);
-                          if (r.ok) setForm(r.data.account ?? { id: a.id, pan: a.pan, label: a.label, expiresAt: a.expiresAt, cookieString: '' });
-                        }}>编辑</button>
+                        <button className="btn btn-sm" onClick={() => setForm({ id: a.id, pan: a.pan, label: a.label, kind: a.kind, expiresAt: a.expiresAt, isTemp: a.isTemp })}>覆盖写入</button>
                         <button className="btn btn-sm btn-danger" onClick={() => removeAccount(a)}>删</button>
                       </div>
                     </td>
@@ -262,6 +292,36 @@ export default function Settings({ toast }) {
               启用通知（当前状态：{settings.notify?.enabled ? '开' : '关'}）
             </label>
             <p className="muted" style={{ marginBottom: 0 }}>已配置 {settings.notify?.webhooks?.length ?? 0} 个 webhook（webhook 明细需直接编辑 data/period/config.json）。</p>
+          </div>
+          <div className="card">
+            <h3>临时凭据 / trace 明细粒度（v1.3.1）</h3>
+            <div className="row">
+              <span className="muted">临时写入默认 TTL</span>
+              <input
+                className="input mono"
+                style={{ width: 90 }}
+                type="number"
+                min="1"
+                max="10080"
+                defaultValue={settings.accountTempTtlMinutes ?? 30}
+                onBlur={(e) => saveMisc({ account_temp_ttl_minutes: Number(e.target.value) })}
+              />
+              <span className="muted">分钟（面板勾选「临时写入」时使用，可单独覆盖）</span>
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <span className="muted">trace 文件明细</span>
+              <select
+                className="input"
+                style={{ width: 140 }}
+                value={settings.traceFileDetail ?? 'full'}
+                onChange={(e) => saveMisc({ trace_file_detail: e.target.value })}
+              >
+                <option value="full">full（名称+大小+哈希）</option>
+                <option value="safe">safe（只留大小）</option>
+                <option value="off">off（不记文件）</option>
+              </select>
+              <span className="muted">名称+大小+哈希可对上游撞库反查文件 —— 共享/公开部署建议 safe 或 off</span>
+            </div>
           </div>
           <div className="card">
             <h3>高级（严格终端穿透）</h3>

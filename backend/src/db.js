@@ -70,6 +70,7 @@ export function initDb() {
       expires_at INTEGER,             -- 已知过期时间（可空）
       status TEXT DEFAULT 'ok',       -- ok | expired | risk
       last_used_at INTEGER,
+      temp_expires_at INTEGER,        -- v1.3.1：临时写入的自动清除时间（到期只清凭据，审计保留）
       created_at INTEGER, updated_at INTEGER
     );
     CREATE TABLE IF NOT EXISTS hosts (
@@ -118,6 +119,9 @@ export function initDb() {
     );
   `);
   // ---- 轻量迁移（旧库补列） ----
+  if (!columnExists('accounts', 'temp_expires_at')) {
+    db.exec(`ALTER TABLE accounts ADD COLUMN temp_expires_at INTEGER`);
+  }
   if (!columnExists('accounts', 'kind')) {
     db.exec(`ALTER TABLE accounts ADD COLUMN kind TEXT DEFAULT 'real'`);
   }

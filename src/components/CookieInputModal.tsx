@@ -65,6 +65,13 @@ export interface CookieInputModalProps {
   carryCheck?: (authString: string) => 'same' | 'other' | null;
   /** v1.3 滚动更新定制话术（adapter.carryOver.messages；缺省 = 不显示提示） */
   carryMessages?: { sameUserHint: string; otherUserHint: string };
+  /**
+   * v1.3.1 凭据快捷更新：离线规划（adapter.carryOver.planCredentialSave）——
+   * 只用于「必填项检查」：missing 非空时小字提示 + 保存按钮置灰（不写入、不惊动 functions）。
+   */
+  planSave?: (authString: string) => { merged: string; missing: string[] };
+  /** v1.3.1：必填项缺失提示前缀（adapter.carryOver.missingHintPrefix，如「缺少必填项：」） */
+  missingHintPrefix?: string;
 }
 
 /** 插件商店链接（get cookies.txt LOCALLY，社区常用导出插件） */
@@ -101,6 +108,8 @@ export function CookieInputModal({
   onCancel,
   carryCheck,
   carryMessages,
+  planSave,
+  missingHintPrefix,
 }: CookieInputModalProps): JSX.Element {
   const wholeString = Boolean(cookieInput.wholeString);
   const initialStr = typeof value === 'string' ? value : '';
@@ -111,6 +120,19 @@ export function CookieInputModal({
   const [pasteText, setPasteText] = useState('');
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * v1.3.1 必填项检查（离线，不请求接口）：planSave 给出 missing 时，
+   * 小字改为「缺少必填项：xx」且底部「保存并重试」置灰（Tzz A2 定稿）。
+   */
+  const missingFields = (text: string): string[] => {
+    if (!planSave) return [];
+    try {
+      return planSave(text).missing ?? [];
+    } catch {
+      return [];
+    }
+  };
 
   /**
    * 行内滚动更新提示（v1.3，右侧嵌入，不新开弹窗）：随输入实时**离线**判定新凭据与缓存账号
@@ -200,6 +222,7 @@ export function CookieInputModal({
   /** 保存：整串模式提交整串（去空白）；多键模式提交声明键映射（去空白值） */
   const save = (): void => {
     if (wholeString) {
+      if (missingFields(fieldStr).length > 0) return; // 必填项不全：按钮已置灰，兼做兼底
       onSave(fieldStr.trim());
       return;
     }
@@ -210,6 +233,9 @@ export function CookieInputModal({
     }
     onSave(out);
   };
+
+  /** 整串模式下的必填项缺失（多键模式不适用：各字段分开填） */
+  const wholeStringMissing = wholeString ? missingFields(fieldStr) : [];
 
   return (
     <div className="modal-mask" onClick={onCancel}>
@@ -272,7 +298,13 @@ export function CookieInputModal({
                 // to_parent_file_id 就是本整串输入行里的三个键）
                 return (
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                    {found.length > 0 ? (
+                    {wholeStringMissing.length > 0 ? (
+                      // v1.3.1（Tzz A2）：必填项缺失就用这行小字直接说缺什么
+                      <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--danger)' }}>
+                        {missingHintPrefix ?? ''}
+                        {wholeStringMissing.join(' / ')}
+                      </p>
+                    ) : found.length > 0 ? (
                       <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-dim)' }}>
                         已检测到登录态 key：{found.join(' / ')}
                         {required && !found.includes(required) && `（缺少 ${required}，可能无法通过鉴权）`}
@@ -371,7 +403,13 @@ export function CookieInputModal({
           <button type="button" className="btn btn-secondary" onClick={onCancel}>
             算了吧
           </button>
-          <button type="button" className="btn btn-primary" onClick={save}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={save}
+            disabled={wholeStringMissing.length > 0}
+            title={wholeStringMissing.length > 0 ? `请先补全：${wholeStringMissing.join(' / ')}` : undefined}
+          >
             保存并重试
           </button>
         </div>

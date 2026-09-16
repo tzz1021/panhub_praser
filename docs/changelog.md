@@ -3,6 +3,182 @@
 > 面向开发者（repo:/dev/ 入口）。面向用户的说明见 README.md。
 > 约定：`## [版本] 日期` + 三块（新增 / 修复 / 变更）。
 
+## [1.3.1] 2026-09-15 —— 凭据快捷更新（前端）+ 四类规范/后端批次进行中
+
+> 状态：**P1（前端）已实现**；P2 functions / P3 backend / P4 插件见 `docs/wip3-plan.md`（待开工）。
+> 定稿依据：Tzz 2026-09-15 草案 + 对 12 项待拍板的回复（记录在 `docs/wip3-plan.md` §9）。
+
+### 新增
+- **凭据快捷更新（同账号合并写入，根治“粘贴长 auth 冲掉其他字段”）**：
+  `planAlipanCredentialSave()` 离线规划 —— 解析输入（支持只粘贴 `Bearer xxx`）→ **同账号时**
+  自动用上次暂存的 `drive_id` / `to_parent_file_id` 补齐 → 算出仍缺的必填项 → 判定账号是否变化。
+  同账号：静默合并写入（保留既有转存映射，续杯不断）；首次：直接写入
+- **账号覆盖确认弹窗**（`AccountOverwriteModal`，阿里云盘特设、强制开启，结果页注册）：
+  仅当「本次账号 ≠ 上次暂存账号」出现，标题「是否覆盖当前暂存区的 userid」；
+  选「是」= 覆盖暂存记录（换号则作废旧账号转存映射）；
+  选「否」= **本次输入仅本次有效**（内存态，刷新即失效，不写 localStorage、不进后端统计）
+- **必填项闸门（A2）**：CookieInputModal 的小字改为「缺少必填项：auth / drive_id / …」，
+  底部「保存并重试」直接置灰 —— 缺失就不写入、不惊动 functions
+- **统一存储记录（丢一起）**：凭据 + 上次账号 + 转存映射合并为一条记录
+  `{ lastUserId, lastAuth, drive_id, to_parent_file_id, updateAt, files: { [file_id]: copied_file_id } }`，
+  键 `pan-web:alipan-carry:v1`；旧键 `pan-web:alipan-auth:v1` 只读兼容（首次读取自动搬迁）
+
+### 修复
+- **转存副本被删/进回收站**（403 `ForbiddenFileInTheRecycleBin`，“存过又删了”）：
+  不再当作致命错误 —— carry 直接回退**重新转存**并刷新本地记录（与登录态过期区分开）
+- 内存态（选「否」）不再污染记录：转存映射只进内存，不写库
+
+### 变更
+- 账号身份解码字段名对齐真机（阿里 web token payload 为 `userId`，兼容 `user_id/sub/uid`）
+- `ALIPAN_CARRY_STALE_CODES` / `ALIPAN_ACCOUNT_SWITCH_PROMPT` / `ALIPAN_MISSING_FIELDS_HINT`
+  进适配器常量区；UI 仍只引用 `adapter.carryOver.*`，零硬编码文案
+
+### 新增（P2 functions + P3 首批）
+- **四类操作规范**：`scan` / `download`（取直链，取代笼统的 prase）/ `restore`（转存，取代 copy）/ `credential-pick`（取号，取代 cookie-pick）
+  —— 三处词表**同表**（SPA `src/core/transport/types.ts` / 云端 `functions/api/_shared/proxy-core.js` / 后端 `backend/src/proxy.js`），自测有防漂移断言
+- **functions 按四类拆分**：共享核心下沉 `functions/api/_shared/proxy-core.js`（`_` 前缀不生成路由），
+  薄路由 `scan.js` / `download.js` / `restore.js` / `credential-pick.js` + **兼容别名 `proxy.js`**（老部署/老 SPA 照旧发 `/api/proxy`）；
+  路由声明与目标分类不一致 → 400 `OP_MISMATCH`（带 `classified` 回报）
+- **SPA 按类路由**：ProxyTransport 按目标 URL 选 `/api/<类>`；对面是旧部署（404/405）自动回退 `/api/proxy` 并记住本会话
+- **托管状态新头** `x-panhub-credential: picked|guest|none`（旧 `x-panhub-backend: ok` 保留一版过渡）
+- **后端 credential-pick**：`POST /api/credential-pick`（旧 `/api/proxy/cookie-pick` 保留一版）+
+  `GET /api/credential-pick/accounts?provider=&account=` → `{ accounts: string[] }`
+  （**只回非敏感身份**：JWT userId → `drive:<drive_id>` → 账号标签兜底；X-Proxy-Token + 30/min 限频 + `no-store`）
+- **hop 按类转发**：`backend/src/proxy.js` → `${wrangler.port}/api/<类>`（旧部署 404/405 回退 `/api/proxy`），
+  取号链路改调 `/api/credential-pick`（老 backend 404 时回退 cookie-pick）
+
+### 修复
+- **取号判定词表**：`pickAccountForPan` 接受 `download`（旧 `prase` 仍兼容）—— 修「换词表后取号全部失效」（冒烟拓出）
+
+### 变更
+- 统计口径归一：历史 trace 的 `prase` 读作 `download`（旧行无法再细分转存/取直链），面板列改为 scan / download / restore / credential-pick / 其他
+- 后端冒烟 **26 → 31 项**（credential-pick 取号 / 身份查询只回非敏感 / 旧路径兼容 / 无账号 404）
+- 云端路由冒烟（本地 wrangler）：无令牌 401 · 四类 OP_MISMATCH · 白名单 403 · 兼容别名生效 · 真实 scan 转发 200
+
+### 新增（P3 余项 + P4）
+- **面板读写分离（读不裸奔 / 写要真令牌）**：
+  - 读：账号列表只回**非敏感元数据**（id/网盘/备注/状态/身份 userId/过期/临时到期/最近使用）——
+    去掉 `cookieTail`/`cookieLength`/`keys` 指纹字段；备注缺省时回退**身份（userId）**而不是 `#num`
+  - 读：改读**服务端快照**（5min 自动刷新 + 写后即刷 + `POST /api/web/accounts/refresh` 手动），
+    面板不再有能力「按字段查库」
+  - 写：`POST`/`DELETE` 账号**服务端真校验二次令牌**（`body.confirmToken`）—— 此前只有面板前端拦，服务端没查；
+    编辑不再回填凭据（写新不读旧，`credentialRefillable:false`）
+- **临时写入（临时凭据）**：新增 `accounts.temp_expires_at` + 面板「临时写入」勾选 + 默认 TTL 可配
+  （`account_temp_ttl_minutes`，默认 30 分钟，每次写入可单独填）；到期由 5min 定时**只清凭据**，
+  **审计保留**（`account.temp-write` / `account.temp-expired`）
+- **P4 凭据刷新 = 手动预设**（Tzz 定稿：自动执行全部改手动，不做宏录制）：
+  - `backend/src/cdp.js`：零依赖最小 CDP 客户端（内置 WebSocket；9222 = 浏览器，9229/9230 = wrangler inspector 仅 health）
+  - `backend/src/presets.js`：内置预设（阿里 auth / 夸克 cookie / UC __pugs）＝固定脚本化流程
+    （打开页面 → 等页面自己下发新凭据 → 读出 → 加密写账号池），**手动触发 + 每预设限频 5min + 全局单飞**
+  - 面板插件页重写：浏览器 health、预设状态/上次结果/身份、运行按钮（要二次令牌）；
+    **凭据与指纹不回面板**（读出来直接进加密库）
+  - 插件页此前请求的 `/api/web/plugins` 后端**根本没实现**（页面永远「加载中…」）→ 现已实现
+
+### 新增（隐私 · 响应 Tzz 审阅）
+- **trace 文件明细粒度**：`trace_file_detail = full | safe | off`（设置面板可切；云端 `env.TRACE_FILE_DETAIL`）
+  —— 名称+大小+哈希足以对上游**撞库反查文件**；共享/公开部署建议 `safe`（只留大小）或 `off`
+
+### 修复
+- 账号写入/删除的「二次确认令牌」此前**只有前端拦**（服务端不校验）→ 现服务端真校验（403 CONFIRM_REQUIRED）
+
+### 待落地
+- **D1**：SPA 滚动更新探测改走 functions（Tzz：后面再做；`carry.ts` 已标 TODO）
+- 第三方压缩包插件（package + install.sh + webui 配置注入）：按 Tzz 定稿后续开放
+
+---
+
+## [1.3-carry1] 2026-09-12 —— 阿里云盘滚动更新（carry-over）
+
+### 新增
+- **auth 生命期内「续杯」免转存**：`prase` 时若缓存命中（缓存 userId === 本次 auth 的 userId 且映射命中该原 file_id）
+  → 直接 `get_download_url`，**跳过 batch copy**（省空间、避免「空间满了」）；未命中 → 正常两跳并把新 file_id 写回缓存。
+  缓存键 `pan-web:alipan-carry:v1`，形态 `{ userId, driveId, files: { <原分享 file_id>: <转存后 file_id> }, updatedAt }`
+  （v1.3.1 起合并为统一记录 `{ lastUserId, lastAuth, drive_id, to_parent_file_id, updateAt, files }`，见下条）
+- **凭据过期提示（红色 toast）**：仅「本地有缓存 + 已发出的一次请求失败（不重试）」时判定；
+  用本次 auth 的 userId 探 hop（`Transport.hopAccounts`，端点 `GET {代理}/api/hop/accounts?provider=alipan&account=`，404/501 = 未实现）
+  —— 命中同账号 → 静默续杯；未配置/不可达/未实现/空/不含该账号 → 弹
+  「凭据过期了，建议填入上次同一个账号的新凭据这样无需转存哦」
+- **新凭据离线校验（CookieInputModal 行内）**：离线解新 auth 的 userId 与缓存比对，
+  一致 → 绿字「没删吧？老铁」；不一致 → 红字「换号了？再存一次哦」（不请求任何接口、不新开弹窗）
+- **auth 串兼容裸形态**：只写 `Bearer xxx`（无 `auth=` 前缀、无其他字段）、`Authorization: Bearer …` 整行、纯 JWT
+  都能当 auth 用；`drive_id`/`to_parent_file_id` 仍可键值对混写；弹窗键检测跟随适配器解析，不再误报「未检测到 auth」
+- **话术外置**：本轮全部定制文案集中在 `adapters/alipan/types.ts#ALIPAN_CARRY_MESSAGES`，UI 只读 `adapter.carryOver.messages`
+
+### 修复
+- **缓存里的 file_id 已失效**（用户删了转存文件等）→ 自动回退正常 copy 并覆盖缓存；登录态错误不回退（与「过期不重试」一致）
+- 适配器能力对象化：`PanAdapter.carryOver`（expiredCodes / onExpired / checkNewAuth / messages）——UI 不 import 具体适配器
+
+### 变更
+- 滚动更新缓存放 localStorage（**不用 footprint/IndexedDB**）：core 零网盘依赖、单条内部状态、与 alipan 凭据同层便于清理（理由见 `adapters/alipan/carry.ts` 文件头）
+- `adapters/alipan/scanner.ts` 的取直链逻辑抽为 `fetchDownloadUrl()`；转存批次改为**只对未命中文件**下发（下标映射保持）
+
+---
+
+## [1.3-docs1] 2026-09-12 —— 文档：坑位日志 + 后端草案
+
+### 新增
+- `docs/Cautions.md`：坑位日志（18 条，时间倒序，现象/根因/修法/教训四段，只收已查实的）
+- `docs/STRUCTURE.md` 文末「插件体系（草案）」「后端待办（草案）」两节（含冲突待拍板表）
+
+---
+
+## [1.3] 2026-09-11 —— 阿里云盘真机修复：直链 15min / expiration 字段 / 下载头落地
+
+### 修复
+- **直链「刚解析就显示过期」**：上游过期字段真名是 `expiration`（ISO），代码误写 `expire_time` → undefined →
+  `ossUrlExpiryMs()` 只认 UC/夸克签名形态（`Expires=`/`auth_key=`）→ null → linkStatus「无过期信息 = 过期」兜底 → 三层连坐误判。
+  修：类型补 `expiration/content_hash/content_hash_name/crc64_hash/size`（保留 `expire_time` 兼容）、
+  scanner 用 `expiration ?? expire_time`、`expiresAt` 接上、`hash = content_hash`（sha1）、`size` 兜底目录树值
+- 转存内层错误码 `.` 形态归一命中（真机 `QuotaExhausted.Drive`）
+
+### 变更
+- **下载层静态头回退适配器**：`ALIPAN_DOWNLOAD_HEADERS = { Referer: 'https://www.alipan.com/' }`（精确值，OSS 签名
+  `x-oss-additional-headers` 绑定；其他值 403、缺失 400）；`ExportFile.headers` 由结果页按 `adapter.downloadHeaders` 组装，
+  curl `-e` / aria2 `--referer` / gopeed `extra.header` 三生成器映射；curl.ts 里 UC 硬编码 UA/Referer 删除
+- 真机结论固化：直链有效期 **15min**；`_headers` 全局 `Referrer-Policy: no-referrer` 与 alipan 直链**先天冲突**
+  （浏览器无法产生精确 Referer）→ alipan 直链只能导出命令注入 Referer，不做浏览器直开
+
+---
+
+## [1.3] 2026-09-09 —— SPA+functions 适配（契约收窄 / 复用分家）
+
+### 变更
+- **linkFetcher 契约收窄（裁决权下沉适配器）**：core 不再拼 `fids/fidsTokens`、不再预判 `shareFidToken` 缺失即拒绝；
+  适配器从 `files` 自行取字段，缺 per-file 令牌/不支持项在**对应下标**产出失败项（error + errorCode）
+- **复用分家**：`scan` 快照复用仍看偏好 `reuseWindowHours`；`prase` 直链复用改按**上游绝对过期时间**
+  （`DownloadResult.expiresAt` ← URL `Expires`/`auth_key` 或响应 `expiration`），偏好窗口退出直链判定；
+  `linkStatus` 重写、`DirectoryTree` 去 prop、footprint/prase 快照补存 `cookieString/hash/expiresAt`
+- `functions/api/proxy.js`：`classifyOperation`/`panOfHostname` 补 alipan 段；取号 gate 排除 alipan（登录态 = SPA 自带 Bearer）
+
+### 新增
+- `PanAdapter.downloadHeaders`（各盘在自家 types.ts 与 `*_LIMITS` 并列声明）
+
+### 修复
+- 绿：typecheck / vite build / 本地 wrangler 8788 代理 scan 链路 6/6
+
+---
+
+## [1.3] 2026-09-08 —— 阿里云盘接入（第三个网盘）
+
+### 新增
+- **适配器 `src/adapters/alipan/`**（types/auth/selector/jumper/scanner/registry，与 quark 同构）：
+  - `scan`（免登录三连）：`/v2/share_link/get_share_token`（share_token 2h，走 `x-share-token`）+
+    `/adrive/v2/file/get_by_share` + `/adrive/v2/file/list_by_share`（**next_marker 游标分页**，root 包装层自动下钻）
+  - `prase`（**两跳，无游客通道**）：`/adrive/v4/batch` + `/file/copy` 转存（`x-share-token` 源授权 + `Authorization` 落盘账号，内层 201 新 file_id）
+    → `/v2/file/get_download_url`（`x-canary: client=windows,app=adrive,version=v6.0.0`）
+  - 直链是 OSS 预签名 URL，下载必须带**精确** `Referer: https://www.alipan.com/`
+- **登录态凭据串**（非浏览器 cookie）：`auth=Bearer xxx;drive_id=…;to_parent_file_id=…;user-agent=可选;x-device-id=可选`；
+  `drive_id` 必须手填（user 接口要 X-signature，不研究）；缺凭据抛 `31001` 哨兵码复用夸克弹窗流
+- `CookieInputModal` 泛化：整串模式 + `load/save` 钩子 + `intro/placeholder/browserCookie:false`（不再硬编码夸克）
+- `core/treeWalker` 兼容游标分页网盘（`ListParams.marker`/`ListResult.nextMarker`），uc/quark 页码制不变
+
+### 变更
+- `functions/api/proxy.js` 头白名单/域判定补 alipan（authorization / x-share-token / x-canary / x-device-id）
+
+### 已知
+- 阿里完全拒绝游客 prase（登录用户也不能直下他人分享，403 `ForbiddenNoPermission.File`）；`access_token` 有效期 ≈2h
+- 幂等转存**不做**（X-signature 查不了 user 接口、copy 后 file_id 不可跟踪）→ `auto_rename` 副本累积接受，清理由用户负责
+
 ## 2026-09-03 —— 夸克凭据链路收口（fix only）
 
 ### 修复

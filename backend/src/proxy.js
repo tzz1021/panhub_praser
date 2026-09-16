@@ -24,15 +24,23 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getConfig, loadSecretKey } from './config.js';
 import { verifyProxyToken } from './auth.js';
 import { log, writeDebugTrace } from './log.js';
-import { getDb, audit, findHost } from './db.js';
+import { getDb, audit, findHost, getSetting } from './db.js';
 import { pickAccountForPan, mergeSetCookies, accountTag } from './cookies.js';
 
 const UPSTREAM_TIMEOUT_MS = 25_000;
 
-/** URL 特征 → 操作分类（scan | prase | other；与 SPA 术语一致） */
+/**
+ * URL 特征 → 操作分类（v1.3.1 四类：scan | download | restore | credential-pick | other）。
+ * 与 SPA `src/core/transport/types.ts#classifyOperation`、云端 `functions/api/_shared/proxy-core.js#classifyOperation`
+ * **同一张表**（三处最小复制，改一处必须同步；冒烟断言防漂移）。
+ * legacy：历史 trace 的 `prase` 读作 download（backend stats 侧归一）。
+ */
 function classifyOperation(url) {
-  if (/sharepage\/(token|detail)/.test(url)) return 'scan';
-  if (/file\/download/.test(url)) return 'prase';
+  if (/sharepage\/(token|detail)/.test(url)) return 'scan'; // uc/quark
+  if (/\/v2\/share_link\/get_share_token|\/adrive\/v2\/file\/get_by_share|\/adrive\/v2\/file\/list_by_share/.test(url)) return 'scan'; // alipan
+  if (/file\/download/.test(url)) return 'download'; // uc/quark
+  if (/\/v2\/file\/get_download_url/.test(url)) return 'download'; // alipan
+  if (/\/adrive\/v4\/batch/.test(url)) return 'restore'; // alipan 批量转存
   return 'other';
 }
 
@@ -129,10 +137,15 @@ function insertFileHits(rows, frontendId, ts, pan, accountId, clientIp) {
   return rows.length;
 }
 
-/** 转发到 wrangler（唯一转发实现 functions/api/proxy.js 在 wrangler 侧执行） */
-async function forwardToWrangler(payload, proxyToken) {
+/**
+ * 转发到 wrangler（唯一转发实现在 functions/api/_shared/proxy-core.js，wrangler 侧执行）。
+ * v1.3.1 四类拆分：优先发 `${wrangler.port}/api/<类>`；对面是旧部署（404/405）→ 兜底 /api/proxy 重发一次，
+ * 行为与拆分前一致（launcher 起的老 wrangler 不需要同步升级）。
+ */
+async function forwardToWrangler(payload, proxyToken, kind = 'other') {
   const cfg = getConfig();
-  const url = `http://127.0.0.1:${cfg.wrangler.port}/api/proxy`;
+  const path = kind === 'other' ? '/api/proxy' : `/api/${kind}`;
+  const url = `http://127.0.0.1:${cfg.wrangler.port}${path}`;
   let res;
   try {
     res = await fetch(url, {
@@ -203,12 +216,12 @@ export async function handleProxy(reqBody, clientIp, proxyToken, traceHeader = '
     log('error', `hop：阶段一落库失败 — ${err.message}`);
   }
 
-  // ③ 账号注入（v1 分流矩阵：prase/download 注入登录态，scan 保持游客；
+  // ③ 账号注入（v1 分流矩阵：download 注入登录态，scan 保持游客；
   //    无正式账号时回退 guest 账号——随机 __pugs 占位，label guest#xxx 可追溯）
   const outHeaders = {};
   for (const [k, v] of Object.entries(reqBody.headers ?? {})) outHeaders[k.toLowerCase()] = v;
   let hit = null; // { account, tag }
-  if (pan && operation === 'prase') {
+  if (pan && operation === 'download') {
     hit = pickAccountForPan(pan, operation);
     if (hit) {
       const prev = outHeaders.cookie ? `${outHeaders.cookie}; ` : '';
@@ -223,7 +236,16 @@ export async function handleProxy(reqBody, clientIp, proxyToken, traceHeader = '
     upstream = await forwardToWrangler(
       { url: target.href, method, headers: outHeaders, body: reqBody.body ?? null },
       proxyToken,
+      operation,
     );
+    // v1.3.1 过渡：wrangler 侧还是旧部署（没有 /api/<类> 路由）→ 用兼容别名重发一次
+    if (upstream.status === 404 || upstream.status === 405) {
+      upstream = await forwardToWrangler(
+        { url: target.href, method, headers: outHeaders, body: reqBody.body ?? null },
+        proxyToken,
+        'other',
+      );
+    }
   } catch (err) {
     log('error', `hop：wrangler 转发失败 — ${err.message}`);
     return { status: 502, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ error: 'WRANGLER_UNAVAILABLE', message: err.message }) };
@@ -248,7 +270,7 @@ export async function handleProxy(reqBody, clientIp, proxyToken, traceHeader = '
   // v1.2.2 fix（09-02）：取号兜底回传 __puus —— 账号池 __puus 仍有效时夸克不刷新
   // （上游无 x-quark-puus，SPA 拿不到大文件 OSS 导出凭据，六种导出方式全缺 __puus）；
   // 回传本次实际下发到上游的 cookie 里的 __puus（同一授权会话，CDN 认这个值）。
-  if (pan === 'quark' && operation === 'prase' && hit && !respHeaders['x-quark-puus']) {
+  if (pan === 'quark' && operation === 'download' && hit && !respHeaders['x-quark-puus']) {
     const m = hit.cookieString.match(/(?:^|;\s*)__puus=([^;]*)/);
     if (m && m[1]) respHeaders['x-quark-puus'] = m[1];
   }
@@ -258,11 +280,18 @@ export async function handleProxy(reqBody, clientIp, proxyToken, traceHeader = '
   // 前端据此区分「代理托管已就绪（无需手动 cookie）」vs「随机游客尝试」（guest 占位不发，话术才准确）。
   // 此前该头全链路无人下发 → 前端 09-02 守卫永不生效：取号成功也误报「未检测到 selfhost」。
   if (hit?.account?.kind === 'real') respHeaders['x-panhub-backend'] = 'ok';
+  // v1.3.1 四类规范：托管状态新头 x-panhub-credential: picked|guest|none
+  // （旧头 x-panhub-backend 保留一版，兼容未升级的 SPA）
+  respHeaders['x-panhub-credential'] = hit?.account?.kind === 'real' ? 'picked' : hit ? 'guest' : 'none';
 
   // ⑦ 阶段二写入（trace v2 §3）：UPDATE 请求行 + 批量 file_hits + debug 文件（完整 body）
   try {
     const reqBodyText = typeof reqBody.body === 'string' ? reqBody.body : '';
-    const files = extractFileHits(upstream.body, reqBody);
+    // v1.3.1 隐私（Tzz 审阅）：文件明细粒度 full | safe | off
+    // （名称+大小+哈希可对上游撞库反查文件；共享/公开部署建议 safe 或 off）
+    const detail = String(getSetting('trace_file_detail') ?? 'full');
+    let files = detail === 'off' ? [] : extractFileHits(upstream.body, reqBody);
+    if (detail === 'safe') files = files.map((f) => ({ ...f, name: null, md5: null }));
     const db = getDb();
     if (logRowId != null) {
       db.prepare('UPDATE proxy_logs SET pan=?, account_id=?, req_status=?, req_ms=?, duration_ms=?, body_preview=? WHERE id=?')

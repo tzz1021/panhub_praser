@@ -258,6 +258,21 @@ export interface CarryOverRequirement {
    * 'same' = 与本地缓存同账号（绿字 hints）/ 'other' = 换号（红字）/ null = 无缓存或无法判定（不提示）
    */
   checkNewAuth?(authString: string): 'same' | 'other' | null;
+  /**
+   * v1.3.1 凭据快捷更新：写入前的**离线**规划（合并上次暂存的 drive_id/to_parent_file_id +
+   * 必填项检查 + 账号判定）。UI 只消费结果：missing 非空 → 提示 + 保存按钮置灰；
+   * verdict 'changed' → 弹 accountSwitchPrompt 确认是否覆盖暂存区。
+   */
+  planCredentialSave?(authString: string): CarryOverCredentialPlan;
+  /**
+   * v1.3.1：应用写入决策（在用户确认/提交后调用）：
+   * 'persist' = 覆盖暂存记录（换号则作废旧账号的映射）；'session' = 仅本次有效（内存态，刷新即失效）。
+   */
+  applyCredentialSave?(plan: CarryOverCredentialPlan, mode: 'persist' | 'session'): void;
+  /** v1.3.1：账号变化确认弹窗话术（title/context/按钮；缺省 = 不弹） */
+  readonly accountSwitchPrompt?: { title: string; context: string; confirm: string; cancel: string };
+  /** v1.3.1：必填项缺失提示前缀（如「缺少必填项：」；与 missing 拼接展示） */
+  readonly missingHintPrefix?: string;
   /** 定制话术（集中在适配器侧常量区，UI 只引用） */
   readonly messages: {
     /** 凭据过期 + hop 未命中时的红色 toast */
@@ -267,6 +282,21 @@ export interface CarryOverRequirement {
     /** 新凭据换了账号（红字） */
     otherUserHint: string;
   };
+}
+
+/**
+ * v1.3.1：凭据写入规划（适配器产出，UI 只消费 —— 不 import 具体适配器）。
+ * 对应 adapters/alipan/carry.ts#planAlipanCredentialSave。
+ */
+export interface CarryOverCredentialPlan {
+  /** 'new' 首次写入 / 'same' 与上次同账号（静默合并）/ 'changed' 换了账号（需确认） */
+  verdict: 'new' | 'same' | 'changed';
+  /** 合并后的凭据串（已用上次暂存补齐同账号缺字段） */
+  merged: string;
+  /** 仍缺失的必填项（如 auth / drive_id / to_parent_file_id）；非空 = 禁止保存 */
+  missing: string[];
+  /** 本次凭据的账号身份（解不出 null） */
+  account: string | null;
 }
 
 export interface PanAdapter {
