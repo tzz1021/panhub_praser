@@ -97,6 +97,11 @@ export function DirectoryTree({
             const status: LinkStatusKind = detail.kind === 'green' ? 'green' : detail.kind === 'yellow' ? 'yellow' : detail.kind === 'failed' || detail.kind === 'terminated' ? 'red' : 'white';
             const rowClass =
               status === 'green' ? 'file-row--green' : status === 'yellow' ? 'file-row--yellow' : status === 'red' ? 'file-row--red' : '';
+            // v1.3.1：打对钩的行加 .file-row--checked（自定义底色/主题默认高亮）；
+            // 目录行的勾选态由子树推导（dirChecked），与勾选框显示保持一致。
+            // 优先级：status 红/黄/绿 > 勾选底色，靠 index.css 里的复合选择器（tr.file-row--checked.file-row--green）保证。
+            const isChecked = isDir ? dirChecked(node, checked) : checked.has(f.fid);
+            const trClass = `${rowClass}${isChecked ? ' file-row--checked' : ''}`.trim();
             // v1.1.7：详细状态文本颜色（设置开启时显示）
             const statusColor =
               status === 'green'
@@ -107,13 +112,13 @@ export function DirectoryTree({
                     ? 'var(--danger)'
                     : 'var(--text-dim)';
             return (
-              <tr key={f.fid} className={rowClass}>
+              <tr key={f.fid} className={trClass}>
                 <td className="col-name">
                   <div className="tree-row">
                     {depth > 0 && <span className="tree-spacer">{'\u00A0'.repeat((depth - 1) * 4)}├─ </span>}
                     <input
                       type="checkbox"
-                      checked={isDir ? dirChecked(node, checked) : checked.has(f.fid)}
+                      checked={isChecked}
                       onChange={() => (isDir ? onToggleDirAll(node) : onToggleFile(f.fid))}
                       title={isDir ? '勾选/取消该目录下全部文件' : undefined}
                     />

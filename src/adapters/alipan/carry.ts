@@ -26,7 +26,7 @@
 import {
   ALIPAN_CARRY_EXPIRED_CODES,
   ALIPAN_CARRY_STALE_CODES,
-  ALIPAN_HOP_PROVIDER,
+  ALIPAN_CREDENTIAL_PROVIDER,
 } from './types';
 import { getActiveTransport } from '../../core/transport/types';
 import {
@@ -49,12 +49,12 @@ export const ALIPAN_CARRY_MAX_FILES = 500;
 /** 滚动更新过期判定结果（进解析日志，便于排查；话术不进这里） */
 export type AlipanCarryExpireReason =
   | 'no-cache' // 本地无记录 → 滚动更新无从谈起，不提示（规格 3 前提）
-  | 'hop-hit' // hop 命中同账号 → 静默续杯
-  | 'hop-unavailable' // 未配置 hop（直连 / 无代理地址）
-  | 'hop-unreachable' // hop 不可达（网络错误 / 非 2xx）
-  | 'hop-unimplemented' // hop 端点未实现（404/501；后端待补）
-  | 'hop-empty' // hop 返回空账号集合
-  | 'hop-miss' // hop 账号集合不含本次缓存的账号
+  | 'credential-hit' // 后端命中同账号 → 静默续杯
+  | 'credential-unavailable' // 直连 / 无代理地址（没有 functions 可问）
+  | 'credential-unreachable' // functions/backend 不可达（网络错误 / 非 2xx）
+  | 'credential-unimplemented' // 端点未实现（404/501；老部署）
+  | 'credential-guest' // 后端在，但没有这个账号（只能游客/占位）
+  | 'credential-none' // 后端明确无托管（无号 / 未配置）
   | 'no-account'; // 本次 auth 解不出账号身份，无法比对（保守归入提示）
 
 /** 决策结果：silent = 不打扰用户（静默续杯 / 无记录）；notify = 弹红色 toast 提示换新凭据 */
@@ -278,40 +278,39 @@ export function checkAlipanCarryNewAuth(authString: string): 'same' | 'other' | 
   return account === rec.lastUserId ? 'same' : 'other';
 }
 
-/* ============================== 触发判定（hop 探测） ============================== */
+/* ========================= ==== 触发判定（凭据探测） ============================ */
 
 /**
  * auth 过期后的决策（规格 3）：本地有记录 + 已发出的一次请求失败（不重试）时调用。
- * 用**本次 auth 的账号身份**试探 hop（后端未实现 → 安全降级到「提示」）：
- *   命中同账号 → 'silent'（静默续杯：换上新凭据即可复用记录，无需重新转存）
- *   未配置/不可达/未实现/返回空/不含该账号 → 'notify'（红色 toast，文案取 ALIPAN_CARRY_MESSAGES）
- *
- * TODO(v1.3.1·P3，Tzz D1 定稿「为了安全只能走前者」)：改由 **functions 发起探测**、结果以响应头回传，
- * SPA 不再直连 hop（凭据不下发 SPA）。当前实现保留 SPA 直连形态，等 P3 端点就绪后一次替换。
+ * v1.3.1·D1 定稿（Tzz：凭据不下发 SPA）：探测**走 functions**（`transport.credentialProbe`
+ * → `POST {代理}/api/credential-pick`），SPA 不直连 hop/backend，也拿不到账号集合：
+ *   命中同账号（hit）→ 'silent'（静默续杯：换上新凭据即可复用记录，无需重新转存）
+ *   guest / none / 未配置 / 不可达 / 未实现 / 解不出身份 → 'notify'（红色 toast，文案取
+ *   ALIPAN_CARRY_MESSAGES.expiredToast）。
  */
 export async function onAlipanExpired(): Promise<AlipanCarryExpireOutcome> {
   const rec = readAlipanStore();
   if (!rec?.lastUserId) return { action: 'silent', reason: 'no-cache' };
   const account = alipanAccountKey(getAlipanAuthString());
   const transport = getActiveTransport();
-  const probe = transport.hopAccounts?.bind(transport);
-  // 直连（或未实现的传输）没有 hop → 未找到 hop
-  if (!probe) return { action: 'notify', reason: 'hop-unavailable' };
-  const res = await probe(ALIPAN_HOP_PROVIDER, account ?? undefined);
+  const probe = transport.credentialProbe?.bind(transport);
+  // 直连（或未实现的传输）没有探测能力 → 无托管
+  if (!probe) return { action: 'notify', reason: 'credential-unavailable' };
+  const res = await probe(ALIPAN_CREDENTIAL_PROVIDER, account ?? undefined);
   if (!res.ok) {
     // 失败原因逐项映射（不用类型断言：传输层词表与 alipan 日志词表解耦）
     const reason: AlipanCarryExpireReason =
       res.reason === 'unavailable'
-        ? 'hop-unavailable'
-        : res.reason === 'unreachable'
-          ? 'hop-unreachable'
-          : res.reason === 'empty'
-            ? 'hop-empty'
-            : 'hop-unimplemented';
+        ? 'credential-unavailable'
+        : res.reason === 'unimplemented'
+          ? 'credential-unimplemented'
+          : 'credential-unreachable';
     return { action: 'notify', reason };
   }
   if (!account) return { action: 'notify', reason: 'no-account' };
-  return res.accounts.includes(account)
-    ? { action: 'silent', reason: 'hop-hit' }
-    : { action: 'notify', reason: 'hop-miss' };
+  if (res.credential === 'hit') return { action: 'silent', reason: 'credential-hit' };
+  return {
+    action: 'notify',
+    reason: res.credential === 'guest' ? 'credential-guest' : 'credential-none',
+  };
 }

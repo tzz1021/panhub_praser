@@ -227,7 +227,7 @@
 | C1 | 插件卸载/回滚 | 同意 | ↘ P4 |
 | C2 | chromium 来源 | 同意（检测已有） | ↘ P4 |
 | C3 | 插件直写 db.js | 同意 | ↘ P4 |
-| D1 | hop 探测走向 | **只能走 functions**（不下发 SPA） | ↘ P3（carry.ts 已标 TODO） |
+| D1 | hop 探测走向 | **只能走 functions**（不下发 SPA） | ✅ 2026-09-18 落地：`/api/credential-pick` 三态（hit|guest|none）+ `Transport.credentialProbe` |
 | D2 | carry 键 | 要返回 userId（不要 `#3`）—— 长期非敏感凭据 | ↘ P3 |
 | D3 | tag | 本批打 **1.3.1**；1.4 = 迅雷云盘 | ✅ changelog |
 | E1 | 面板备份 | 不做（走 launcher backup） | ↘ P3 |
@@ -255,7 +255,7 @@
 | P2 | functions 四类拆分 + `x-panhub-credential` + credential-pick 路由 + SPA 按类路由 | ✅ **已完成**（本地 wrangler 路由冒烟 ✅ + 真实 scan 转发 200） |
 | P3 | backend：hop 按类转发、`/api/credential-pick[/accounts]`、统计归一、**面板读写分离 + 快照 + 临时 TTL** | ✅ **完成**（hop-smoke 43/43） |
 | P4 | CDP 最小客户端 + 凭据刷新**手动预设**（限频/单飞/审计）+ 面板插件页 | ✅ **完成**（无浏览器时安全降级已验证；真实取值待真机） |
-| D1 | SPA 探测改走 functions | ⬜ 暂缓（Tzz：后面再做） |
+| D1 | SPA 探测改走 functions | ✅ **已完成**（2026-09-18：`Transport.credentialProbe` → `POST {代理}/api/credential-pick`，只暴露 `hit|guest|none`；SPA 不再直连 hop、拿不到账号集合与凭据本体） |
 
 commit 备注（Tzz 定）：`pref：functions separeted` · `feat：backend extensions` · `feat：temp&usual credentials（both frontend and backend）`
 

@@ -37,7 +37,7 @@
  *
  * v1.2.2 云端分支（设计稿 docs/backend-wrangler-plan.md §1.2/§3；本地无 env 时零行为变化）：
  *   - 协议体新增可选 frontend_id（SPA ProxyTransport 每次请求 crypto.randomUUID()，缺失不报错）
- *   - env.BACKEND_URL 存在时：仅 operation==='prase' 经 {BACKEND_URL}/api/proxy/cookie-pick 取号
+ *   - env.BACKEND_URL 存在时：仅 operation==='prase' 经 {BACKEND_URL}/api/credential-pick 取号
  *     （800ms 短超时 + 模块级可用性缓存 5s；成功 → cookie 追加进转发头并回传 x-panhub-account 标签，
  *     失败/超时 → 照旧用 SPA 自带 cookie；scan 保持游客，与本地 hop 语义一致）
  *   - env.TRACE_D1 === '1' && env.DB 时：ctx.waitUntil 两阶段写 D1（proxy_logs + file_hits，schema 与本地同构），
@@ -69,7 +69,9 @@ export const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'content-type, x-proxy-token, x-panhub-trace',
   // 跨域部署（如 SPA 在 GitHub Pages、代理在 pages.dev）时，浏览器需要显式放行才能读到 x-pugs 等回传头；
   // v1.2.2：+ x-panhub-account（代理托管账号 label，SPA 展示用）
-  'Access-Control-Expose-Headers': 'x-pugs, x-quark-pus, x-quark-puus, x-panhub-account, x-panhub-backend',
+  // v1.3.1：+ x-panhub-credential（托管状态词表 hit|guest|none，SPA 据此判「是否托管生效」）
+  'Access-Control-Expose-Headers':
+    'x-pugs, x-quark-pus, x-quark-puus, x-panhub-account, x-panhub-backend, x-panhub-credential',
   'Access-Control-Max-Age': '86400',
 };
 
@@ -580,9 +582,10 @@ export async function handleProxyRequest(context, kind = null) {
   }
   // v1.2.2 fix（09-03）：代理托管可用标记 —— 仅正式账号（取号 kind=real，非 guest 占位）时回传 ok；
   // 此前该头从未被任何服务端下发 → SPA 的 09-02 toast 守卫（getLastProxyBackendOk）永不生效。
-  // v1.3.1 四类规范：托管状态用 x-panhub-credential: picked|guest|none 表达
-  // （旧头 x-panhub-backend: ok 同时保留一版，兼容未升级的 SPA；语义改为「取到正式账号」）
-  const credentialState = pickedReal ? 'picked' : accountTag ? 'guest' : 'none';
+  // v1.3.1 四类规范：托管状态用 x-panhub-credential: hit|guest|none 表达
+  // （词表与 SPA `core/transport/types.ts#CredentialState`、backend `src/proxy.js` 同表；
+  //   旧头 x-panhub-backend: ok 同时保留一版，兼容未升级的 SPA；语义改为「取到正式账号」）
+  const credentialState = pickedReal ? 'hit' : accountTag ? 'guest' : 'none';
   respHeaders['x-panhub-credential'] = credentialState;
   if (pickedReal) {
     respHeaders['x-panhub-backend'] = 'ok';

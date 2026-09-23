@@ -12,6 +12,7 @@ import { ResultPage } from './pages/ResultPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { DevPage } from './pages/DevPage';
 import { SettingsModal } from './components/SettingsModal';
+import { ThemeToggle } from './components/ThemeToggle';
 import { ToastProvider } from './components/Toast';
 import type { ParseSession } from './core/types';
 
@@ -58,7 +59,7 @@ function SiteFooter(): ReactNode {
   );
 }
 
-/** 全局页头（logo 占位 + 查看历史 + 设置 + 仓库地址带 GitHub 图标） */
+/** 全局页头（logo 占位 + 查看历史 + 主题灯泡 + 设置 + 仓库地址带 GitHub 图标） */
 function SiteHeader({ onOpenSettings }: { onOpenSettings: () => void }): ReactNode {
   return (
     <header className="site-header">
@@ -76,6 +77,8 @@ function SiteHeader({ onOpenSettings }: { onOpenSettings: () => void }): ReactNo
         <button type="button" className="btn btn-ghost" onClick={() => (window.location.hash = '#/history')}>
           查看历史
         </button>
+        {/* v1.3.1：夜间模式灯泡（三态轮换；header 全局共享，所有页面都有） */}
+        <ThemeToggle />
         <button type="button" className="btn btn-ghost" onClick={onOpenSettings} title="偏好设置">
           ⚙️ 设置
         </button>

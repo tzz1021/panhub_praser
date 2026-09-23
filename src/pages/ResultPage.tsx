@@ -8,7 +8,7 @@
  * v1.1.5.3：移除每行 status 文本（保留行底色）；prase 产物按 fid 落库（足迹恢复复用）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { JSX } from 'react';
+import type { CSSProperties, JSX } from 'react';
 import type { ShareFile } from '../adapters/types';
 import type { CarryOverCredentialPlan } from '../adapters/types';
 import { DirectoryTree, collectLeaves, flattenTree } from '../components/DirectoryTree';
@@ -23,11 +23,12 @@ import { JumptoFolderTipModal } from '../components/JumptoFolderTipModal';
 import { HiddenVolumnModal } from '../components/HiddenVolumnModal';
 import { ExportYellowModal } from '../components/ExportYellowModal';
 import { RestoreCollapsedModal } from '../components/RestoreCollapsedModal';
+import { CheckColorPicker } from '../components/CheckColorPicker';
 import { useToast } from '../components/Toast';
 import { fetchLinks } from '../core/linkFetcher';
 import { getActiveTransport, getLastProxyAccountLabel, getLastProxyBackendOk } from '../core/transport/types';
 import { fetchListSnapshot, renderTreeText, hhmmss } from '../core/listFetcher';
-import { getPreferences } from '../core/preferences';
+import { getPreferences, subscribePreferences } from '../core/preferences';
 import { addRecord } from '../core/footprint/records';
 import { appendLog, listLogs, exportLogsMd } from '../core/footprint/logs';
 import { addGlobalLog } from '../core/footprint/globalLog';
@@ -81,6 +82,15 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   const { toast } = useToast();
 
   const prefs = useMemo(() => getPreferences(), []);
+  // v1.3.1：勾选行自定义底色（'' = 主题默认高亮）—— 立即生效（注入 --check-bg）+ 持久化在 CheckColorPicker 内
+  const [checkColor, setCheckColor] = useState(prefs.checkColor);
+  // 偏好被别处改动（设置面板导入/重置/其它标签页）时跟随
+  useEffect(() => subscribePreferences(() => setCheckColor(getPreferences().checkColor)), []);
+  /** 注入给目录树的 --check-bg（空值时不下发，由 CSS 回退到主题默认高亮 --primary-soft） */
+  const checkColorStyle = useMemo(
+    () => (checkColor ? ({ '--check-bg': checkColor } as CSSProperties) : undefined),
+    [checkColor],
+  );
   // v1.1.8：弹窗保存后重读配置（tick 变化触发 memo 重算，避免推送用旧地址）
   const [dlCfgTick, setDlCfgTick] = useState(0);
   const downloader = useMemo(() => loadDownloaderConfig(), [dlCfgTick]);
@@ -459,10 +469,10 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           setCookieInputWarn(true);
         }
       }
-      // v1.3 滚动更新（carry-over，仅适配器声明时）：**已发出的一次请求失败即判定**登录态过期，
-      // 本页不重试；问适配器「本地有缓存 + hop 是否还有同账号可用凭据」——
-      // 命中即静默续杯（不提示），否则弹红色 toast（文案来自适配器常量），用户填入同账号新凭据后
-      // 即可复用缓存的转存 file_id，无需再次 copy。
+      // v1.3.1·D1（Tzz 定稿）：探测**下沉到 functions**（`POST {代理}/api/credential-pick`，
+      // 词表只暴露 hit|guest|none，SPA 拿不到账号集合与凭据本体）；
+      // hit → 静默续杯（不提示），guest/none/未配置/未实现 → 弹红色 toast（文案来自适配器常量），
+      // 用户填入同账号新凭据后即可复用缓存的转存 file_id，无需再次 copy。
       if (carryReq?.onExpired) {
         const expired = results.some(
           (r) => !r.ok && r.errorCode !== undefined && carryReq.expiredCodes.includes(r.errorCode),
@@ -539,9 +549,9 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
           okCount === files.length ? 'success' : 'error',
         );
       }
-      // v1.2.2（wip2 修正）：hop/取号命中**正式账号**时回传 x-panhub-backend: ok（09-03 前全链路
-      // 无人下发该头 → 本 toast 从未触发）→ 提示「代理托管账号」已生效，避免用户在弹窗里白填
-      // cookie（proxy 模式下 localStorage 不参与注入）
+      // v1.2.2（wip2 修正）→ v1.3.1：托管状态由响应头 x-panhub-credential: hit|guest|none 表达
+      // （旧头 x-panhub-backend: ok 兼容一版）→ 命中正式账号时提示「代理托管账号」已生效，
+      // 避免用户在弹窗里白填 cookie（proxy 模式下 localStorage 不参与注入）
       if (!backendOkToastShown.current && getLastProxyBackendOk()) {
         backendOkToastShown.current = true;
         const label = getLastProxyAccountLabel();
@@ -978,7 +988,7 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
       </div>
 
       {/* 资源列表 */}
-      <div className="card">
+      <div className="card" style={checkColorStyle}>
         <div className="card-head">
           <div className="card-title-row">
             <h2 className="card-title">资源列表</h2>
@@ -986,6 +996,8 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
               已选 {selectedFiles.length} 个文件 · {formatSize(selectedSize)}
               {crossFolder && ' · 跨文件夹'}
             </span>
+            {/* v1.3.1：勾选行底色调色盘（小 🎨 按钮，插入树面板标题行末尾；不改动其它按钮语义） */}
+            <CheckColorPicker value={checkColor} onChange={setCheckColor} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             {linkedOkCount > 0 && selectedFiles.length > linkedOkCount && (

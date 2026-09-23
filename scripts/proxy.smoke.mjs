@@ -59,8 +59,12 @@ globalThis.fetch = async (url, init) => {
   assert('转发目标 URL 正确', String(url) === 'https://pc-api.uc.cn/1/clouddrive/share?pr=UCBrowser', String(url));
   assert('转发 method 正确', init.method === 'POST', init.method);
   assert('转发 body 正确', init.body === '{"a":1}', String(init.body));
-  assert('丢弃 cookie', !('cookie' in init.headers), JSON.stringify(init.headers));
-  assert('丢弃 authorization', !('authorization' in init.headers), JSON.stringify(init.headers));
+  // v1.3.1 修正（旧断言已过期）：cookie / authorization 自 v1.1.9（夸克登录态）与 v1.2.x（alipan
+  // Bearer 登录态）起**有意放行**（见 proxy-core 文件头「边界」与 forwardHeaders），不再丢弃；
+  // 这里改成断言「白名单外的头被丢弃」，保留原意图（只转发必要头）。
+  assert('丢弃白名单外的头', !('x-evil' in init.headers) && !('x-forwarded-for' in init.headers), JSON.stringify(init.headers));
+  assert('放行 cookie（v1.1.9 夸克登录态）', 'cookie' in init.headers, JSON.stringify(init.headers));
+  assert('放行 authorization（v1.2.x alipan 登录态）', 'authorization' in init.headers, JSON.stringify(init.headers));
   return new Response('{"code":0,"data":{"ok":true}}', {
     status: 200,
     headers: { 'content-type': 'application/json' },
@@ -69,7 +73,7 @@ globalThis.fetch = async (url, init) => {
 r = await call({
   url: 'https://pc-api.uc.cn/1/clouddrive/share?pr=UCBrowser',
   method: 'POST',
-  headers: { 'content-type': 'application/json', cookie: 'session=abc', authorization: 'Bearer x', accept: '*/*' },
+  headers: { 'content-type': 'application/json', cookie: 'session=abc', authorization: 'Bearer x', accept: '*/*', 'x-evil': '1', 'x-forwarded-for': '1.2.3.4' },
   body: '{"a":1}',
 });
 assert('转发成功透传 200', r.status === 200, `got ${r.status}`);

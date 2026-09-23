@@ -104,7 +104,7 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
               ))}
             </tr>
             <tr>
-              {/* v1.1.7：etag 种类/支持情况（前端未暴露 hash，UC 不支持） */}
+              {/* v1.3.1：etag 种类/支持情况（UC = download/列表响应自带的 md5，需 base64 转码；数据源 = adapters/uc/types.ts#UC_LIMITS.etagNote） */}
               <td>etag 种类/支持情况</td>
               {PAN_LIST.map((p) => (
                 <td key={p.id}>{limitsById.get(p.id)?.etagNote ?? '—'}</td>

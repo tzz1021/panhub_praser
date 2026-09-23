@@ -3,6 +3,53 @@
 > 面向开发者（repo:/dev/ 入口）。面向用户的说明见 README.md。
 > 约定：`## [版本] 日期` + 三块（新增 / 修复 / 变更）。
 
+## [1.3.1.next] 2026-09-18 —— 内测反馈批次（hop 下沉 / UC hash / 夜间模式 / Windows launcher）
+
+> 状态：**已实现待审**（未 commit / 未 push；tag 由 Tzz 定，`1.3.1.next` 为占位）。
+> 本轮同时记录一条**已定位未修**的已知问题（扫描静默丢数据，见文末）。
+
+### 新增
+- **hop 探测下沉到 functions（D1 落地）**：SPA 不再直连 hop，改走 `Transport.credentialProbe()`
+  → `POST {代理}/api/credential-pick`（body 只有 `{ provider, account? }`，account 为非敏感身份），
+  **只暴露三态** `hit | guest | none`（不再回 `accounts: string[]`，SPA 拿不到账号集合与凭据本体）。
+  `functions/api/credential-pick.js` 由 functions 去问 backend `/api/credential-pick/accounts`，
+  不可达 / 老 backend 404 / 非 JSON 一律安全降级为 `none`；探测独立限频 30/min/IP。
+  carry 决策随之改词：`credential-hit`（静默续杯）/ `credential-guest` / `credential-none` /
+  `credential-unavailable`（直连）/ `credential-unreachable` / `credential-unimplemented`。
+- **夜间模式**：偏好新增 `theme: 'auto' | 'light' | 'dark'`（默认 auto）；顶栏（header 全局共享，
+  所有页面都有）加三态灯泡，单击 `auto → light → dark → auto` 轮换；写 `<html data-theme>`，
+  auto 时用 `prefers-color-scheme` 解析并实时跟随；`index.css` 把浅色值全部收敛为变量并补
+  `[data-theme='dark']` 整组覆盖（含 `color-scheme`，原生控件跟随）。
+- **勾选行自定义底色**：偏好新增 `checkColor`（默认空 = 主题默认高亮）；结果页目录树加
+  🎨 调色盘按钮（8 预设 + 默认 + 清除），即时生效并持久化；**status 红/黄/绿优先于勾选底色**
+  （复合选择器 `tr.file-row--checked.file-row--<status>`，悬停规则用 `:where()` 排除）。
+- **Windows launcher**：新增 `backend/launcher.ps1`（PowerShell 5.1+/7+，无需管理员），
+  与 `launcher.sh` 子命令/产物路径/语义等价；差异：无 tmux（debug 用独立控制台窗口）、
+  无 SIGTERM（`taskkill /T /F` + 命令行归属校验防误杀）、`chmod 600` → `icacls` 收敛 ACL。
+- **UC hash（md5）**：新增 `src/adapters/uc/hash.ts#normalizeUcMd5()` —— UC 的 `md5` 有两种形态
+  （16 字节摘要的 base64 `"75zWrXnoh/KB14803+wkJg=="` 与直给 32 位 hex），统一归一到小写 hex；
+  接进 `DownloadResult.hash`（导出注释行）与 `ShareFile.md5`（校验和列）；`UC_LIMITS.etagNote` 同步更新。
+
+### 修复
+- `scripts/proxy.smoke.mjs` 两条**过期断言**修正：旧断言要求「丢弃 cookie / authorization」，
+  但该行为自 v1.1.9（夸克登录态）与 v1.2.x（alipan Bearer）起已**有意放行**（见 proxy-core 文件头）；
+  改为断言「丢弃白名单外的头 + 放行 cookie/authorization」，冒烟恢复全绿。
+
+### 变更
+- 托管状态词表统一为 `hit | guest | none`：`functions/_shared/proxy-core.js`、
+  `backend/src/proxy.js`、SPA `core/transport/types.ts` 三处同表（旧 `picked` 不再产生；
+  词表值变更属**跨版本兼容项**，老 SPA 读 `x-panhub-credential` 只会取不到值，不影响主流程）；
+  `Access-Control-Expose-Headers` 相应加 `x-panhub-credential`。
+- 前端说明文案精简：CookieInputModal 的两段托管提示合并进蓝色 inline 提示块；
+  SPA 内不再出现「hop / 后端取号」这类内部术语（链路细节归 functions）。
+
+### 已知问题（已定位，**未修**，待拍板）
+- **扫描失败被静默记 0**：`treeWalker` 的 catch 把失败目录 `size=0 / children=undefined`，
+  失败目录不递归 → 调用数与进度条同步变小 → **结果不完整却看起来完整**。
+  实测（同一条 UC 分享）：直连 223 次调用 = 4.18 GiB；经 CF Functions 60/min 限频 →
+  209 次调用（149×429）= 1.12 GiB。同时确认「设置里的扫描深度」目前是死配置
+  （`fetchListSnapshot` 未把 `maxDepth` 传给 `buildTree`）。修法建议见 Tzz 审议记录。
+
 ## [1.3.1] 2026-09-15 —— 凭据快捷更新（前端）+ 四类规范/后端批次进行中
 
 > 状态：**P1（前端）已实现**；P2 functions / P3 backend / P4 插件见 `docs/wip3-plan.md`（待开工）。

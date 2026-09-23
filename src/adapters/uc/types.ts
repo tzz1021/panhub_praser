@@ -41,7 +41,10 @@ export const UC_LIMITS = {
   batchOnlyAriaGopeed: false,
   sizeLimitNote: '4G 文件都不需要，临界未知',
   linkExpiryNote: '直链 3-6h/Cookie 3h',
-  etagNote: '不支持',
+  // v1.3.1：UC download/列表（sharepage/detail 的 list[]）响应自带 md5，
+  // 部分为 16 字节摘要的 base64（如 "75zWrXnoh/KB14803+wkJg=="），需转码成 hex
+  // （见 adapters/uc/hash.ts#normalizeUcMd5）；非本地计算摘要
+  etagNote: 'md5（download/列表响应自带，部分需 base64 转码）',
 } as const;
 
 /**
@@ -65,6 +68,8 @@ export interface UcDetailItem {
   size?: number;
   share_fid_token?: string;
   format_type?: string;
+  /** 文件校验和（true 抓包：base64 形态 24 字符「xx==」或 32 位 hex，两种都有；归一化见 hash.ts） */
+  md5?: string;
   created_at?: number;
   updated_at?: number;
 }

@@ -141,15 +141,14 @@ export const ALIPAN_ACCOUNT_SWITCH_PROMPT = {
 export const ALIPAN_MISSING_FIELDS_HINT = '缺少必填项：';
 
 /**
- * hop 探测（滚动更新触发判据；**后端尚未实现**，v1.3 占位）：
- * 语义 = 问代理后端「当前可用的账号身份集合」，与本次 auth 的 userId 比对：
- *   命中 → 同账号仍有可用凭据 → 静默续杯（不打扰用户）
- *   未命中/未配置/未实现 → 红色 toast（messages.expiredToast）
- * 端点常量见 core/transport/types.ts 的 HOP_ACCOUNTS_PATH（通用传输层能力）+ ALIPAN_HOP_PROVIDER。
- * TODO(backend)：路径/方法/入参（provider + account）/返回体字段（accounts: string[]）待后端实现后对齐，
- * 见交付摘要「开放问题：hop 探测端点形态」。
+ * 凭据探测（滚动更新触发判据；v1.3.1·D1 已下沉到 functions，不再是占位）：
+ * 语义 = 问 **functions** 「这个账号是什么状态」（`POST {代理}/api/credential-pick`，
+ * 词表 hit|guest|none；SPA 不直连 hop/backend、不接触账号集合）：
+ *   hit → 同账号仍有可用凭据 → 静默续杯（不打扰用户）
+ *   guest / none / 未配置 / 未实现 / 解不出身份 → 红色 toast（messages.expiredToast）
+ * 端点常量见 core/transport/types.ts 的 CREDENTIAL_PICK_PATH + ALIPAN_CREDENTIAL_PROVIDER。
  */
-export const ALIPAN_HOP_PROVIDER = 'alipan';
+export const ALIPAN_CREDENTIAL_PROVIDER = 'alipan';
 
 /**
  * 阿里云盘特性表（偏好设置 UAC 表数据源）：

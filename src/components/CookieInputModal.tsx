@@ -252,7 +252,8 @@ export function CookieInputModal({
             {cookieInput.intro ?? '需要 cookie 鉴权，下面是本次获取到的必要 cookie 值 【如实显示】：'}
           </p>
 
-          {/* v1.2.2：代理托管账号提示（响应头 x-panhub-account；仅展示 label，不暴露任何 cookie 明文） */}
+          {/* v1.2.2：代理托管账号提示（响应头 x-panhub-account；仅展示 label，不暴露任何 cookie 明文）
+              v1.3.1：前端只保留这一块说明（托管链路已下沉到 functions，不再暴露内部术语） */}
           {proxyAccount && (
             <p
               style={{
@@ -267,12 +268,9 @@ export function CookieInputModal({
             >
               代理托管账号：<strong>{proxyAccount}</strong>
               <span style={{ color: 'var(--text-faint)' }}>（cookie 由代理托管，不在此显示明文）</span>
-            </p>
-          )}
-          {/* v1.2.2（wip2 修正）：代理托管模式下填写仅在直连模式生效，弱化提示避免白填 */}
-          {proxyAccount && (
-            <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--text-faint)' }}>
-              当前为代理托管模式（backend 自动注入账号），此处填写的 cookie 仅直连模式使用。
+              <span style={{ display: 'block', marginTop: 2, color: 'var(--text-faint)' }}>
+                此处填写的 cookie 仅在直连模式生效。
+              </span>
             </p>
           )}
 

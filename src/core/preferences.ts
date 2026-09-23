@@ -19,13 +19,15 @@ const STORAGE_KEY = 'pan-web:prefs:v1';
  * - 足迹：全保留默认开，日志等级 debug、链接/树限 100 条、日志 5MB
  */
 export const DEFAULTS: Preferences = {
+  theme: 'auto', // v1.3.1：主题三态（顶栏灯泡轮换）默认跟随系统
+  checkColor: '', // v1.3.1：勾选行自定义底色，'' = 主题默认高亮
   singleFileMode: 'parse',
   sameDirMode: 'parse',
   keepStructure: false,
   scanDepth: 0,
   showDirSize: true,
   showDirProps: true, // v1.1.6：文件夹内部文件和子文件夹个数
-  showEtag: false, // v1.1.7：校验和列（UC 不支持，默认关）
+  showEtag: false, // v1.1.7：校验和列（UC 的 md5 来自 download/列表响应，需 base64 转码；默认关）
   showLinkDetail: false, // v1.1.7：显示详细的解析时间和有效期
   defaultTerminal: '', // v1.1.7：默认终端类型（空 = 浏览器 UA）
   restoreCollapsed: 'ask', // v1.1.7：复用期间恢复上次折叠状态（丢弃/恢复/每次询问）
@@ -106,6 +108,47 @@ function filterUndefined<T extends object>(obj: T): Partial<T> {
 }
 
 /**
+ * 偏好变更订阅（v1.3.1）：主题灯泡 / 勾选底色这类需要实时跟随偏好的组件用。
+ * 只做「写后通知」，不改存储格式；跨标签页靠同键 storage 事件转发。
+ */
+const preferenceListeners = new Set<() => void>();
+
+/** 通知所有订阅者（setPreferences / resetPreferences 写后调用） */
+function notifyPreferenceListeners(): void {
+  for (const listener of [...preferenceListeners]) {
+    try {
+      listener();
+    } catch {
+      // 单个订阅者抛错不影响其它订阅者与写入流程
+    }
+  }
+}
+
+/** storage 事件：仅同键（其它标签页写入偏好）时通知 */
+function onStorageChange(event: StorageEvent): void {
+  if (event.key === null || event.key === STORAGE_KEY) {
+    notifyPreferenceListeners();
+  }
+}
+
+/**
+ * 订阅偏好变更（返回退订函数）。
+ * 触发时机：本页 setPreferences / resetPreferences，或其它标签页写同一键（storage）。
+ */
+export function subscribePreferences(listener: () => void): () => void {
+  preferenceListeners.add(listener);
+  if (preferenceListeners.size === 1 && typeof window !== 'undefined') {
+    window.addEventListener('storage', onStorageChange);
+  }
+  return () => {
+    preferenceListeners.delete(listener);
+    if (preferenceListeners.size === 0 && typeof window !== 'undefined') {
+      window.removeEventListener('storage', onStorageChange);
+    }
+  };
+}
+
+/**
  * 合并一个嵌套分组：以 base 为准，stored 只覆盖其中存在的字段；
  * stored 不是普通对象（null/数组/原始值）时整体回退 base，防脏数据。
  */
@@ -178,6 +221,8 @@ export function setPreferences(patch: Partial<Preferences>): Preferences {
       // 写失败静默忽略（隐私模式/配额超限），不影响本次返回值
     }
   }
+  // v1.3.1：通知订阅者（主题灯泡 / 勾选底色等实时跟随）
+  notifyPreferenceListeners();
   return merged;
 }
 
@@ -191,4 +236,6 @@ export function resetPreferences(): void {
   } catch {
     // 忽略移除异常（如隐私模式禁用存储）
   }
+  // v1.3.1：重置也要通知订阅者（回到 DEFAULTS 的 theme/checkColor）
+  notifyPreferenceListeners();
 }

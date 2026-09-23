@@ -64,21 +64,34 @@ export interface TransportResponse {
   body: string;
 }
 
-/* ============================== v1.3 hop 账号探测 ============================== */
+/* ===================== v1.3.1·D1 凭据探测（下沉到 functions） ===================== */
 
 /**
- * hop 账号探测端点（**后端尚未实现，v1.3 占位**；见 docs/STRUCTURE.md 后端待办 #4）。
- * 形态：`GET {proxyBase}{HOP_ACCOUNTS_PATH}?provider=<网盘 id>&account=<账号身份>`
- * （X-Proxy-Token 与 /api/proxy 同；account 仅放非敏感账号 id，不放任何 token/cookie）。
- * TODO(backend)：路径/方法/入参/返回体（{ accounts: string[] }）待后端实现后按实际契约对齐，
- * 前端已按「未实现 = 安全降级到提示」处理，后端上线前不会阻断主流程。
+ * 凭据状态词表（**唯一词表**，三处同表：本文件 / functions `_shared/proxy-core.js` /
+ * backend `src/proxy.js`）：
+ *   hit   = 命中该网盘的**正式账号**（可用：滚动更新可静默续杯）
+ *   guest = 后端在，但没有这个账号（只能游客态 / 占位账号）
+ *   none  = 无托管（未配置后端 / 不可达 / 未实现 / 该网盘无号）
+ * 与转发链路的 `x-panhub-credential` 响应头**同一个词表**（旧头 `x-panhub-backend: ok` 兼容一版）。
  */
-export const HOP_ACCOUNTS_PATH = '/api/hop/accounts';
+export type CredentialState = 'hit' | 'guest' | 'none';
 
-/** hop 探测结果：ok=false 时 reason 说明为何拿不到账号集合（调用方安全降级，不视作致命错误） */
-export type HopAccountsResult =
-  | { ok: true; accounts: string[] }
-  | { ok: false; reason: 'unavailable' | 'unreachable' | 'unimplemented' | 'empty' };
+/**
+ * 凭据探测端点 = **functions 上的自有路由**（不是 hop/backend 端点）。
+ * v1.3.1·D1 定稿：SPA 只跟 functions 说话，由 functions 去问 backend
+ * （Tzz：凭据不下发 SPA；SPA 也永远拿不到账号集合/凭据本体）。
+ *
+ * 形态：`POST {proxyBase}{CREDENTIAL_PICK_PATH}`
+ *   body `{ provider: <网盘 id>, account?: <账号身份，非敏感> }`
+ *   → `{ backend: boolean, credential: 'hit' | 'guest' | 'none' }`
+ * 直连（无代理）没有该能力 → 调用方按「无托管」处理（安全降级，不阻断主流程）。
+ */
+export const CREDENTIAL_PICK_PATH = '/api/credential-pick';
+
+/** 凭据探测结果：ok=false 时 reason 说明为何拿不到状态（调用方安全降级，不视作致命错误） */
+export type CredentialProbeResult =
+  | { ok: true; credential: CredentialState }
+  | { ok: false; reason: 'unavailable' | 'unreachable' | 'unimplemented' };
 
 /** 传输实现（direct / proxy / plugin） */
 export interface Transport {
@@ -88,13 +101,14 @@ export interface Transport {
   /** 当前是否可用（proxy 未填地址 = 不可用） */
   available(): boolean;
   /**
-   * v1.3 hop 账号探测（**可选能力**：只有代理类传输实现，直连 = undefined = 「未找到 hop」）。
-   * 语义：问代理后端「当前可用的账号身份集合」，供适配器做滚动更新（carry-over）判定；
-   * 端点未实现/不可达一律返回 ok:false（**安全降级**，调用方转「提示用户填新凭据」）。
+   * v1.3.1·D1 凭据探测（**可选能力**：只有代理类传输实现，直连 = undefined = 「无托管」）。
+   * 语义：问 **functions**（由它去问 backend）「这个 provider 的这个账号是什么状态」，
+   * 供适配器做滚动更新（carry-over）判定；端点未实现/不可达一律返回 ok:false
+   * （**安全降级**，调用方转「提示用户填新凭据」）。
    * @param provider 网盘 id（如 'alipan'）
    * @param account  账号身份（非敏感；命中判定用，可省）
    */
-  hopAccounts?(provider: string, account?: string): Promise<HopAccountsResult>;
+  credentialProbe?(provider: string, account?: string): Promise<CredentialProbeResult>;
 }
 
 /** 直连实现：浏览器 fetch（现状逻辑搬移，错误结构化） */
@@ -185,33 +199,36 @@ export class ProxyTransport implements Transport {
   }
 
   /**
-   * v1.3 hop 账号探测（滚动更新用）。后端未实现（404/501）/不可达/返回空 → ok:false，
-   * 调用方安全降级到「提示用户填新凭据」——绝不因探测失败阻断主流程。
+   * v1.3.1·D1 凭据探测（滚动更新用）：只问 **functions** 拿 hit|guest|none，
+   * 不直连 hop/backend，也拿不到账号集合或凭据本体（Tzz 定稿）。
+   * 端点不存在（404/501，老部署）/不可达/返回非法 → ok:false，调用方安全降级到
+   * 「提示用户填新凭据」——绝不因探测失败阻断主流程。
    */
-  async hopAccounts(provider: string, account?: string): Promise<HopAccountsResult> {
-    const qs = new URLSearchParams({ provider });
-    if (account) qs.set('account', account);
+  async credentialProbe(provider: string, account?: string): Promise<CredentialProbeResult> {
     let res: Response;
     try {
-      res = await fetch(`${this.base}${HOP_ACCOUNTS_PATH}?${qs.toString()}`, {
-        method: 'GET',
-        headers: { ...(this.token ? { 'X-Proxy-Token': this.token } : {}) },
+      res = await fetch(`${this.base}${CREDENTIAL_PICK_PATH}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.token ? { 'X-Proxy-Token': this.token } : {}),
+        },
+        body: JSON.stringify({ provider, ...(account ? { account } : {}) }),
       });
     } catch {
       return { ok: false, reason: 'unreachable' };
     }
     if (res.status === 404 || res.status === 501) return { ok: false, reason: 'unimplemented' };
     if (!res.ok) return { ok: false, reason: 'unreachable' };
-    let data: { accounts?: unknown } | null = null;
+    let data: { credential?: unknown } | null = null;
     try {
-      data = (await res.json()) as { accounts?: unknown };
+      data = (await res.json()) as { credential?: unknown };
     } catch {
       return { ok: false, reason: 'unreachable' };
     }
-    const accounts = Array.isArray(data?.accounts)
-      ? data.accounts.filter((v): v is string => typeof v === 'string' && v.length > 0)
-      : [];
-    return accounts.length > 0 ? { ok: true, accounts } : { ok: false, reason: 'empty' };
+    const state = data?.credential;
+    if (state !== 'hit' && state !== 'guest' && state !== 'none') return { ok: false, reason: 'unreachable' };
+    return { ok: true, credential: state };
   }
 
   async request(req: TransportRequest): Promise<TransportResponse> {
@@ -286,10 +303,10 @@ export class ProxyTransport implements Transport {
     if (headers['x-panhub-backend'] === 'ok') {
       lastProxyBackendOk = true;
     }
-    // v1.3.1 四类规范：托管状态新头 x-panhub-credential: picked|guest|none
-    // （旧头 x-panhub-backend 仍兼容一版，见上）
+    // v1.3.1 四类规范：托管状态头 x-panhub-credential: hit|guest|none
+    // （旧头 x-panhub-backend: ok 仍兼容一版，见上）
     const credState = headers['x-panhub-credential'];
-    if (credState === 'picked') lastProxyBackendOk = true;
+    if (credState === 'hit') lastProxyBackendOk = true;
     else if (credState === 'guest' || credState === 'none') lastProxyBackendOk = false;
     return {
       status: res.status,

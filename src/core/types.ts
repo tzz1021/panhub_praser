@@ -212,8 +212,25 @@ export interface AdvancedPrefs {
   hiddenVolumnHint: boolean;
 }
 
+/**
+ * 主题偏好（v1.3.1：顶栏灯泡三态轮换）
+ * 'auto' = 跟随系统（matchMedia prefers-color-scheme）| 'light' 浅色 | 'dark' 深色
+ */
+export type ThemePref = 'auto' | 'light' | 'dark';
+
 /** 偏好设置（core/preferences.ts，localStorage；默认值见 HANDOFF 附件 §2/§3） */
 export interface Preferences {
+  /**
+   * 主题（v1.3.1）：默认 'auto' 跟随系统。
+   * 最终生效值写入 <html data-theme="light|dark">（auto 也解析为最终值），
+   * data-theme-pref 保留原始三态。
+   */
+  theme: ThemePref;
+  /**
+   * 勾选行自定义底色（v1.3.1）：'' = 用主题默认高亮（--primary-soft）。
+   * 仅作用于「打对钩」的行（.file-row--checked）；status 红/黄/绿优先级更高，见 index.css。
+   */
+  checkColor: string;
   /** 单个文件默认方式：'parse' 解析展示直链 | 'download' 按默认方式直接下载 */
   singleFileMode: 'parse' | 'download';
   /** 同目录批量默认方式（'download' 时逐个按单文件方式处理） */

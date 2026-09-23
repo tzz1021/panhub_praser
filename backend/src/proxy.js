@@ -280,9 +280,10 @@ export async function handleProxy(reqBody, clientIp, proxyToken, traceHeader = '
   // 前端据此区分「代理托管已就绪（无需手动 cookie）」vs「随机游客尝试」（guest 占位不发，话术才准确）。
   // 此前该头全链路无人下发 → 前端 09-02 守卫永不生效：取号成功也误报「未检测到 selfhost」。
   if (hit?.account?.kind === 'real') respHeaders['x-panhub-backend'] = 'ok';
-  // v1.3.1 四类规范：托管状态新头 x-panhub-credential: picked|guest|none
-  // （旧头 x-panhub-backend 保留一版，兼容未升级的 SPA）
-  respHeaders['x-panhub-credential'] = hit?.account?.kind === 'real' ? 'picked' : hit ? 'guest' : 'none';
+  // v1.3.1 四类规范：托管状态头 x-panhub-credential: hit|guest|none
+  // （词表唯一，与 SPA `core/transport/types.ts#CredentialState`、functions `_shared/proxy-core.js` 同表；
+  //   旧头 x-panhub-backend 保留一版，兼容未升级的 SPA）
+  respHeaders['x-panhub-credential'] = hit?.account?.kind === 'real' ? 'hit' : hit ? 'guest' : 'none';
 
   // ⑦ 阶段二写入（trace v2 §3）：UPDATE 请求行 + 批量 file_hits + debug 文件（完整 body）
   try {

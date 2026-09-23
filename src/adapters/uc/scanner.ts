@@ -26,6 +26,7 @@ import type {
 import { getActiveTransport, TransportError, type TransportResponse } from '../../core/transport/types';
 import { ossUrlExpiryMs } from '../../utils/linkStatus';
 import { capturePugsFromHeaders } from './cookies';
+import { normalizeUcMd5 } from './hash';
 import { API_BASE, DL_QUERY, ERROR_MESSAGES, PC_QUERY, type UcDetailItem, type UcDownloadItem } from './types';
 
 /**
@@ -128,6 +129,8 @@ function toShareFile(item: UcDetailItem): ShareFile {
     shareFidToken: item.share_fid_token,
     formatType: item.format_type,
     modifiedAt: item.updated_at ?? item.created_at,
+    // v1.3.1：列表/detail 路径自带 md5（形态不统一，归一化成 hex）→ 「校验和」列离线可见
+    md5: normalizeUcMd5(item.md5),
   };
 }
 
@@ -255,6 +258,8 @@ async function getDownloadLinks(params: DownloadParams): Promise<DownloadResult[
     if (!target) return; // 响应条数 > 请求条数（上游异常）：多余条目丢弃
     results[target.idx] = {
       url: item.download_url, // OSS 签名 URL，原样透传，禁止任何加工
+      // v1.3.1：download 响应自带 md5（base64/hex 两形态，归一化成 hex）→ 导出注释行校验下载完整性
+      hash: normalizeUcMd5(item.md5),
       // v1.2.x 复用分家：直链绝对过期 ms（URL Expires/auth_key 参数解析），linkStatus 以此判定
       expiresAt: ossUrlExpiryMs(item.download_url) ?? undefined,
       cookie, // §12：每文件携带与其直链同响应的 __pugs

@@ -23,6 +23,21 @@
 launcher 全部命令：`setup | start | stop | status | restart | debug | logs | build | backup | reset`
 （也接受 `--` 前缀：`./backend/launcher.sh --stop` 等价 `./backend/launcher.sh stop`；无参数打印用法+状态）
 
+### Windows（PowerShell）
+
+`backend/launcher.ps1` 是 `launcher.sh` 的 Windows 等价实现（同样的命令、同样的 `data\logs` / `data\run` 产物路径，**不需要管理员权限**）：
+
+```powershell
+.\backend\launcher.ps1 setup     # 首次初始化：装依赖 → 端口+双令牌 + 根 .dev.vars
+.\backend\launcher.ps1 start     # 后台启动（PID 落 data\run\，日志同 data\logs\）
+.\backend\launcher.ps1 status    # 无参数 = 用法+状态；也接受 -- 前缀（--stop 等价 stop）
+.\backend\launcher.ps1 debug     # wrangler 独立窗口真 TTY 面板 + backend 后台 + 日志窗口
+```
+
+平台差异：无 tmux（debug 用独立控制台窗口，start 用隐藏窗口）、无 SIGTERM（stop 用 `taskkill /T /F` 结束进程树，
+并用命令行归属校验防误杀）、`chmod 600` 改用 icacls 收敛 ACL；`PANHUB_BIND` 在 PowerShell 里先设
+`$env:PANHUB_BIND = '127.0.0.1'`（或内网固定 IP）再启动，语义与 bash 版一致。
+
 手动启动（不推荐，跳过 launcher 的端口避让/进程管理）：
 
 ```bash

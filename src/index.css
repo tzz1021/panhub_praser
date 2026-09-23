@@ -3,11 +3,18 @@
  *
  * 色板：emerald 绿主色 + slate 灰次色 + 白色卡片
  * 开关规范（HANDOFF 附件）：开启内部绿色、关闭灰色、按键白色，相邻开关边缘线不重色
+ *
+ * v1.3.1 夜间模式：所有浅色底/边框/阴影都收敛为变量，[data-theme='dark'] 整组覆盖；
+ * 新增样式严禁再写死 #fff / rgba(0,0,0,...) 这类浅色值（否则深色下会出现白底残留）。
  */
 :root {
+  /* 让浏览器原生控件（滚动条/表单/日期选择）跟随当前主题 */
+  color-scheme: light;
   --primary: #059669;
   --primary-hover: #047857;
   --primary-soft: #ecfdf5;
+  --primary-soft-border: #a7f3d0;
+  --primary-soft-hover: #d1fae5;
   --primary-ring: rgba(16, 185, 129, 0.18);
   --bg: #f8fafc;
   --card: #ffffff;
@@ -15,15 +22,88 @@
   --border-strong: #e2e8f0;
   --input-bg: #f8fafc;
   --text: #334155;
+  --text-strong: #1e293b;
   --text-dim: #64748b;
   --text-faint: #94a3b8;
   --text-faintest: #cbd5e1;
   --danger: #dc2626;
   --danger-soft: #fef2f2;
+  --ok: #28a745;
+  --warn: #d4a017;
+  --head-bg: #fafbfc;
+  --row-border: #f8fafc;
+  --row-hover: #fafbfc;
+  --hover: #f1f5f9;
+  --chip-bg: #f1f5f9;
+  --folder-chip-bg: #eff6ff;
+  --folder-chip-fg: #2563eb;
+  --switch-off: #e2e8f0;
+  --switch-knob: #ffffff;
+  --track: #e2e8f0;
+  --mask: rgba(15, 23, 42, 0.45);
+  --bg-code: rgba(0, 0, 0, 0.06);
+  --code-bg: rgba(0, 0, 0, 0.04);
+  --toast-bg: #1e293b;
+  --row-green: rgba(40, 167, 69, 0.07);
+  --row-yellow: rgba(212, 160, 23, 0.1);
+  --row-red: rgba(220, 53, 69, 0.07);
   --radius: 14px;
   --radius-lg: 20px;
   --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
   --shadow-btn: 0 4px 12px rgba(5, 150, 105, 0.25);
+  --shadow-modal: 0 20px 60px rgba(15, 23, 42, 0.25);
+  --shadow-seg: 0 1px 3px rgba(15, 23, 42, 0.12);
+  --shadow-knob: 0 1px 2px rgba(15, 23, 42, 0.25);
+  --shadow-toast: 0 8px 24px rgba(15, 23, 42, 0.25);
+}
+
+/* ============ v1.3.1：夜间模式（<html data-theme="dark">，由顶栏灯泡 / auto 系统偏好写入） ============ */
+[data-theme='dark'] {
+  color-scheme: dark;
+  --primary: #10b981;
+  --primary-hover: #34d399;
+  --primary-soft: #0d2f26;
+  --primary-soft-border: #17624d;
+  --primary-soft-hover: #124a3a;
+  --primary-ring: rgba(16, 185, 129, 0.28);
+  --bg: #0f172a;
+  --card: #1e293b;
+  --border: #243244;
+  --border-strong: #38465c;
+  --input-bg: #0f172a;
+  --text: #e2e8f0;
+  --text-strong: #f1f5f9;
+  --text-dim: #a3b0c2;
+  --text-faint: #8494a8;
+  --text-faintest: #64748b;
+  --danger: #f87171;
+  --danger-soft: #3a1d1d;
+  --ok: #34d399;
+  --warn: #e0b32a;
+  --head-bg: #1a2436;
+  --row-border: #263449;
+  --row-hover: #263449;
+  --hover: #2c3a51;
+  --chip-bg: #33415a;
+  --folder-chip-bg: #172a45;
+  --folder-chip-fg: #7dd3fc;
+  --switch-off: #4a5a72;
+  --switch-knob: #f8fafc;
+  --track: #33415a;
+  --mask: rgba(2, 6, 23, 0.7);
+  --bg-code: rgba(255, 255, 255, 0.09);
+  --code-bg: rgba(255, 255, 255, 0.06);
+  --toast-bg: #33415a;
+  /* 状态行底色：深色下提高不透明度，保证四色仍可辨 */
+  --row-green: rgba(52, 211, 153, 0.18);
+  --row-yellow: rgba(224, 179, 42, 0.2);
+  --row-red: rgba(248, 113, 113, 0.2);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-btn: 0 4px 12px rgba(16, 185, 129, 0.3);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.65);
+  --shadow-seg: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-knob: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --shadow-toast: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
 
 * {
@@ -140,14 +220,14 @@ body {
   flex-wrap: wrap;
   gap: 10px;
   padding: 16px 20px;
-  border-bottom: 1px solid #f8fafc;
+  border-bottom: 1px solid var(--row-border);
 }
 
 .card-title {
   margin: 0;
   font-size: 17px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--text-strong);
 }
 
 .card-title-row {
@@ -206,7 +286,7 @@ body {
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: #f8fafc;
+  background: var(--bg);
 }
 
 .btn-ghost {
@@ -217,7 +297,7 @@ body {
 }
 
 .btn-ghost:hover:not(:disabled) {
-  background: #f1f5f9;
+  background: var(--hover);
   color: var(--text);
 }
 
@@ -230,11 +310,11 @@ body {
 .btn-emerald-soft {
   background: var(--primary-soft);
   color: var(--primary);
-  border: 1px solid #a7f3d0;
+  border: 1px solid var(--primary-soft-border);
 }
 
 .btn-emerald-soft:hover:not(:disabled) {
-  background: #d1fae5;
+  background: var(--primary-soft-hover);
 }
 
 /* ============ 输入框 ============ */
@@ -259,7 +339,7 @@ body {
 }
 
 .input:focus {
-  background: #fff;
+  background: var(--card);
   border-color: var(--primary);
   box-shadow: 0 0 0 4px var(--primary-ring);
 }
@@ -296,7 +376,7 @@ body {
   padding: 7px 14px;
   border-radius: 10px;
   border: 1px solid var(--border-strong);
-  background: #fff;
+  background: var(--card);
   color: var(--text-dim);
   font-size: 13px;
   font-weight: 500;
@@ -311,7 +391,7 @@ body {
 }
 
 .pan-chip--available {
-  border-color: #a7f3d0;
+  border-color: var(--primary-soft-border);
   color: var(--primary);
   background: var(--primary-soft);
 }
@@ -417,7 +497,7 @@ body {
 
 .tl-title {
   font-weight: 700;
-  color: #1e293b;
+  color: var(--text-strong);
   font-size: 14.5px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -433,7 +513,7 @@ body {
 .tl-note {
   font-size: 13px;
   color: var(--text-dim);
-  background: #f8fafc;
+  background: var(--bg);
   border-left: 3px solid var(--primary);
   padding: 4px 10px;
   border-radius: 0 8px 8px 0;
@@ -454,7 +534,7 @@ body {
 .tl-fold {
   font-size: 12px;
   color: var(--text-dim);
-  background: #f8fafc;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 2px 12px;
@@ -463,7 +543,7 @@ body {
 }
 
 .tl-fold:hover {
-  background: #f1f5f9;
+  background: var(--hover);
 }
 
 /* ============ 表格 ============ */
@@ -486,19 +566,20 @@ body {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-faint);
-  background: #fafbfc;
+  background: var(--head-bg);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
 .file-table td {
   padding: 10px 14px;
-  border-bottom: 1px solid #f8fafc;
+  border-bottom: 1px solid var(--row-border);
   vertical-align: middle;
 }
 
-.file-table tbody tr:hover {
-  background: #fafbfc;
+/* 悬停底色不作用于勾选行 / 状态行（否则会盖掉勾选底色与红黄绿状态色） */
+.file-table tbody tr:hover:where(:not(.file-row--checked)) {
+  background: var(--row-hover);
 }
 
 .file-table .col-name {
@@ -545,7 +626,7 @@ body {
 
 .tree-row .file-name--dir {
   font-weight: 600;
-  color: #1e293b;
+  color: var(--text-strong);
 }
 
 .meta-tag {
@@ -554,20 +635,20 @@ body {
   border-radius: 6px;
   font-size: 11px;
   font-weight: 600;
-  background: #f1f5f9;
+  background: var(--chip-bg);
   color: var(--text-dim);
   margin-right: 6px;
   white-space: nowrap;
 }
 
 .meta-tag--file {
-  background: #ecfdf5;
+  background: var(--primary-soft);
   color: var(--primary);
 }
 
 .meta-tag--folder {
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--folder-chip-bg);
+  color: var(--folder-chip-fg);
 }
 
 /* 勾选框 */
@@ -599,7 +680,7 @@ input[type='checkbox'] {
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.45);
+  background: var(--mask);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -611,7 +692,7 @@ input[type='checkbox'] {
 .modal {
   background: var(--card);
   border-radius: var(--radius-lg);
-  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25);
+  box-shadow: var(--shadow-modal);
   width: 100%;
   max-width: 460px;
   max-height: 85vh;
@@ -649,7 +730,7 @@ input[type='checkbox'] {
 }
 
 .modal-close:hover {
-  background: #f1f5f9;
+  background: var(--hover);
   color: var(--text);
 }
 
@@ -709,7 +790,7 @@ input[type='checkbox'] {
 /* 分段选择（下载器类型） */
 .segment {
   display: inline-flex;
-  background: #f1f5f9;
+  background: var(--chip-bg);
   border-radius: 10px;
   padding: 3px;
   gap: 2px;
@@ -729,9 +810,9 @@ input[type='checkbox'] {
 }
 
 .segment button.active {
-  background: #fff;
+  background: var(--card);
   color: var(--primary);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+  box-shadow: var(--shadow-seg);
 }
 
 /* ============ 开关（int.design：开=内部绿 关=灰 按键白 相邻不重色） ============ */
@@ -744,7 +825,7 @@ input[type='checkbox'] {
 }
 
 .switch-row + .switch-row {
-  border-top: 1px solid #f8fafc;
+  border-top: 1px solid var(--row-border);
 }
 
 .switch-label {
@@ -764,7 +845,7 @@ input[type='checkbox'] {
   height: 22px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
-  background: #e2e8f0;
+  background: var(--switch-off);
   cursor: pointer;
   transition: all 0.15s;
   flex-shrink: 0;
@@ -779,8 +860,8 @@ input[type='checkbox'] {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
+  background: var(--switch-knob);
+  box-shadow: var(--shadow-knob);
   transition: transform 0.15s;
 }
 
@@ -808,12 +889,12 @@ input[type='checkbox'] {
 }
 
 .toast {
-  background: #1e293b;
+  background: var(--toast-bg);
   color: #fff;
   padding: 9px 18px;
   border-radius: 999px;
   font-size: 13px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.25);
+  box-shadow: var(--shadow-toast);
   animation: pop-in 0.15s ease;
   max-width: 80vw;
 }
@@ -830,7 +911,7 @@ input[type='checkbox'] {
 .progress {
   height: 6px;
   border-radius: 999px;
-  background: #e2e8f0;
+  background: var(--track);
   overflow: hidden;
   flex: 1;
   min-width: 120px;
@@ -901,7 +982,7 @@ input[type='checkbox'] {
 }
 
 .uac-table th {
-  background: #fafbfc;
+  background: var(--head-bg);
   font-weight: 600;
   color: var(--text-dim);
 }
@@ -955,7 +1036,7 @@ input[type='checkbox'] {
   padding: 10px;
   font-size: 12px;
   line-height: 1.6;
-  background: var(--bg-code, rgba(0, 0, 0, 0.06));
+  background: var(--bg-code);
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -1000,28 +1081,123 @@ input[type='checkbox'] {
   overflow: auto;
   font-size: 11.5px;
   line-height: 1.5;
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   white-space: pre-wrap;
   word-break: break-all;
 }
 
+/* ============ v1.3.1：勾选行自定义底色（--check-bg 由 ResultPage 按偏好注入） ============ */
+/*
+ * 优先级（显式可查，由低到高）：
+ *   1) .file-row--checked —— 勾选行底色（--check-bg；未设时回退主题默认高亮 --primary-soft）
+ *   2) .file-row--green / --yellow / --red —— status 状态色，用复合选择器 tr.file-row--checked.file-row--<status>
+ *      提升特异性（0,2,1 > 0,1,0），因此无论规则先后，status 永远优先于勾选底色。
+ * 另：表格悬停规则用 :where(:not(.file-row--checked)) 排除勾选/状态行，不会盖掉上面两层颜色。
+ * 深色下四色由 [data-theme='dark'] 的 --row-green/--row-yellow/--row-red 覆盖，保持可辨。
+ */
+.file-row--checked {
+  background: var(--check-bg, var(--primary-soft));
+}
+
 /* ============ v1.1.5.2：prase 状态行底色（绿=足够下载 / 黄=不够时间 / 红=失败含手动终止） ============ */
-.file-row--green {
-  background: rgba(40, 167, 69, 0.07);
+/* status 优先于勾选底色（复合选择器提高特异性，顺序无关） */
+.file-row--green,
+tr.file-row--checked.file-row--green {
+  background: var(--row-green);
 }
 
-.file-row--yellow {
-  background: rgba(212, 160, 23, 0.10);
+.file-row--yellow,
+tr.file-row--checked.file-row--yellow {
+  background: var(--row-yellow);
 }
 
-.file-row--red {
-  background: rgba(220, 53, 69, 0.07);
+.file-row--red,
+tr.file-row--checked.file-row--red {
+  background: var(--row-red);
 }
 
 /* warning toast（导出后提示直链可能不够时间） */
 .toast--warning {
   background: rgba(212, 160, 23, 0.95);
   color: #fff;
+}
+
+/* ============ v1.3.1：顶栏夜间模式灯泡（三态轮换） ============ */
+.theme-toggle {
+  padding: 8px 10px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.theme-toggle .theme-toggle-icon {
+  display: inline-block;
+  line-height: 1;
+}
+
+/* ============ v1.3.1：勾选行底色调色盘（结果页树面板小 🎨 按钮） ============ */
+.check-color-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.check-color-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 190px;
+}
+
+.check-color-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.check-color-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.check-color-swatch {
+  width: 30px;
+  height: 24px;
+  border-radius: 7px;
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  padding: 0;
+}
+
+.check-color-swatch--active {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.check-color-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.check-color-default--active {
+  color: var(--primary);
+}
+
+/* 深色模式勾选底色压暗：用同色低透明度叠加，保证行内文字（var(--text)）可读；
+   不支持 color-mix 的浏览器回退到上面的实色 --check-bg。 */
+@supports (color: color-mix(in srgb, red, blue)) {
+  [data-theme='dark'] .file-row--checked {
+    background: color-mix(in srgb, var(--check-bg, var(--primary)) 24%, transparent);
+  }
 }
