@@ -8,12 +8,14 @@
 import type { JSX } from 'react';
 import { useState } from 'react';
 import { getAdapterById, getAdapters } from '../../adapters/registry';
+import type { PanLimits } from '../../adapters/types';
 import { PAN_LIST } from '../PanTable';
 import type { ModalPrefs, TransportPrefs } from '../../core/types';
 import { useToast } from '../Toast';
 import { getActiveTransport, setActiveTransport, transportFromPrefs } from '../../core/transport/types';
 import { ProxyTransport } from '../../core/transport/types';
 import { listAllRecords } from '../../core/footprint/records';
+import { mergeUacLimits, UAC_EXTRA_LIMITS, UAC_ROWS } from './uacData';
 
 /** 开关 */
 export function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label?: string }): JSX.Element {
@@ -37,20 +39,22 @@ export interface UacTableProps {
 }
 
 export function UacTable({ modals, onModalsChange, transport, onTransportChange }: UacTableProps): JSX.Element {
-  // 只取已注册适配器的 limits（v1 只有 UC）
-  const limitsById = new Map(getAdapters().map((a) => [a.id, a.limits]));
+  // 只取已注册适配器的 limits（v1 只有 UC）；v1.3.2 起叠加未适配网盘的补充数据（uacData.ts）
+  const limitsById = new Map<string, Partial<PanLimits>>();
+  for (const a of getAdapters()) {
+    limitsById.set(a.id, mergeUacLimits(a.limits, UAC_EXTRA_LIMITS[a.id]) ?? a.limits);
+  }
+  /** 某盘的 UAC 数据：适配器 limits + 补充数据（未适配网盘只有补充数据） */
+  const limitsOf = (panId: string): Partial<PanLimits> | undefined =>
+    limitsById.get(panId) ?? UAC_EXTRA_LIMITS[panId];
+  /** v1.3.2：UAC 表两形态（收起 = 精简表 6 行；展开 = 详细表 13 行）。
+   *  纯前端状态：两份数据都在包里，切换不触发任何请求（只为看表就不该联网）。 */
+  const [uacExpanded, setUacExpanded] = useState(false);
+  const uacRows = uacExpanded ? UAC_ROWS : UAC_ROWS.filter((r) => r.brief);
   const { toast } = useToast();
   const [proxyDraft, setProxyDraft] = useState(transport.proxyUrl);
   const [tokenDraft, setTokenDraft] = useState(transport.proxyToken);
   const [testing, setTesting] = useState(false);
-
-  const cell = (panId: string, field: 'needsTransfer' | 'needsLogin' | 'canRemoveSpeedLimit'): string => {
-    const lim = limitsById.get(panId);
-    if (!lim) return '—';
-    const v = lim[field];
-    if (typeof v === 'boolean') return v ? '✓' : '✗';
-    return String(v ?? '—');
-  };
 
   const modalRows: Array<{ key: keyof ModalPrefs; label: string; sub?: string }> = [
     { key: 'cookieWarn', label: '读取 Cookie 警告弹窗' },
@@ -66,7 +70,25 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
 
   return (
     <div className="settings-section">
-      <div className="settings-section-title">UAC 选项</div>
+      <div
+        className="settings-section-title"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}
+      >
+        <span>UAC 选项</span>
+        {/* v1.3.2：两形态切换小按钮（右侧）；行定义见 settings/uacData.ts，切换不发请求 */}
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() => setUacExpanded((v) => !v)}
+          title={
+            uacExpanded
+              ? '收起为精简表（6 行）'
+              : '展开详细表（13 行：凭据有效期/续期方案/scan·restore·download 策略）'
+          }
+        >
+          {uacExpanded ? '收起' : '展开'}
+        </button>
+      </div>
       <div className="table-wrap">
         <table className="uac-table">
           <thead>
@@ -78,38 +100,16 @@ export function UacTable({ modals, onModalsChange, transport, onTransportChange 
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>是否需要转存</td>
-              {PAN_LIST.map((p) => (
-                <td key={p.id}>{cell(p.id, 'needsTransfer')}</td>
-              ))}
-            </tr>
-            <tr>
-              <td>是否需要登录</td>
-              {PAN_LIST.map((p) => (
-                <td key={p.id}>{cell(p.id, 'needsLogin')}</td>
-              ))}
-            </tr>
-            <tr>
-              <td>能否移除限速</td>
-              {PAN_LIST.map((p) => (
-                <td key={p.id}>{cell(p.id, 'canRemoveSpeedLimit')}</td>
-              ))}
-            </tr>
-            <tr>
-              {/* v1.1.5.3：直链/签名较小有效期（已知先填，其余适配中） */}
-              <td>oss/sig 较小有效期</td>
-              {PAN_LIST.map((p) => (
-                <td key={p.id}>{limitsById.get(p.id)?.linkExpiryNote ?? '—'}</td>
-              ))}
-            </tr>
-            <tr>
-              {/* v1.3.1：etag 种类/支持情况（UC = download/列表响应自带的 md5，需 base64 转码；数据源 = adapters/uc/types.ts#UC_LIMITS.etagNote） */}
-              <td>etag 种类/支持情况</td>
-              {PAN_LIST.map((p) => (
-                <td key={p.id}>{limitsById.get(p.id)?.etagNote ?? '—'}</td>
-              ))}
-            </tr>
+            {/* v1.3.2：行集合由 uacData.UAC_ROWS 提供（收起 6 行 / 展开 13 行），
+                单元格值 = 适配器 limits（已适配）+ UAC_EXTRA_LIMITS（未适配），缺省 — */}
+            {uacRows.map((row) => (
+              <tr key={row.label}>
+                <td>{row.label}</td>
+                {PAN_LIST.map((p) => (
+                  <td key={p.id}>{row.cell(limitsOf(p.id))}</td>
+                ))}
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

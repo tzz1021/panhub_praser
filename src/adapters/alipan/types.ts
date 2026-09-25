@@ -165,8 +165,18 @@ export const ALIPAN_LIMITS = {
   noLoginNeeded: false,
   batchOnlyAriaGopeed: false,
   sizeLimitNote: '游客不可解析：分享目录树可游客查看，直链必须登录态转存（无大小分级）',
-  linkExpiryNote: '以 get_download_url 返回的 expire_time 为准（未实测区间）',
-  etagNote: '不支持（分享态列表不返回 hash）',
+  // v1.3.2：download_url 有效期改为实测值（原为“未实测区间”）；hash 种类补全为 download 自带
+  linkExpiryNote: '15min',
+  etagNote: 'sha1、crc64（download 自带）',
+  // v1.3.2（UAC 表扩展行，Tzz 2026-09-25 表）
+  shareCredTtlNote: 'share_token 2h',
+  loginCredTtlNote: 'auth(JWT) 2h',
+  sessionRenewNote: '仅 localStorage',
+  altRenewNote: 'Alist(SDK) OAuth 测试失败，据说 20250701 之前可用',
+  scanStrategyNote: '一次性',
+  restoreStrategyNote: '允许接收者是分享者，可批量转存',
+  downloadStrategyNote: '不支持批量',
+  downloadUrlNote: '需要 referer',
 } as const;
 
 /** list_by_share 接口 items[] 原始元素（字段来自真实抓包，只列适配器用到的；

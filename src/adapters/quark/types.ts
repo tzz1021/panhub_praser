@@ -67,6 +67,13 @@ export const QUARK_LIMITS = {
   sizeLimitNote: '游客约 50MB，登录后可大文件（linkswift 称 200MB+ 强登，未实测）',
   linkExpiryNote: '直链 6h（auth_key）/Cookie 3h',
   etagNote: 'md5 为文件标识 tag,download 响应自带非计算摘要',
+  // v1.3.2（UAC 表扩展行，Tzz 2026-09-25 表）
+  shareCredTtlNote: 'stoken 6h',
+  loginCredTtlNote: 'pus 1d',
+  sessionRenewNote: 'cookie',
+  scanStrategyNote: '一次性',
+  downloadStrategyNote: '15 批次',
+  downloadUrlNote: '需要 cookie：登录请求配 puus，游客配 pugs',
 } as const;
 
 /** detail 接口 list[] 原始元素（字段来自真实抓包，只列适配器用到的） */

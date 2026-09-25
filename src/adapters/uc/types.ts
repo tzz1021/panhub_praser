@@ -45,6 +45,13 @@ export const UC_LIMITS = {
   // 部分为 16 字节摘要的 base64（如 "75zWrXnoh/KB14803+wkJg=="），需转码成 hex
   // （见 adapters/uc/hash.ts#normalizeUcMd5）；非本地计算摘要
   etagNote: 'md5（download/列表响应自带，部分需 base64 转码）',
+  // v1.3.2（UAC 表扩展行，Tzz 2026-09-25 表）：分享/登录凭据有效期、续期方式、策略与 download_url 说明
+  shareCredTtlNote: 'stoken 6h',
+  loginCredTtlNote: '随用随取',
+  sessionRenewNote: 'cookie',
+  scanStrategyNote: '一次性',
+  downloadStrategyNote: '15 批次',
+  downloadUrlNote: '需要 cookie：pugs',
 } as const;
 
 /**

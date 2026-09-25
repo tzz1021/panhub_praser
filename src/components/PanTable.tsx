@@ -24,7 +24,7 @@ export const PAN_LIST: PanMeta[] = [
   { id: 'baidu', short: '毒盘', name: '百度网盘', available: false, logo: '/logos/baidupan.png' },
   { id: 'quark', short: '夸', name: '夸克网盘', available: true, logo: '/logos/quark2.png' },
   { id: 'uc', short: 'UC', name: 'UC 网盘', available: true, logo: '/logos/UC2.png' },
-  { id: 'aliyun', short: '阿里', name: '阿里云盘', available: true, logo: '/logos/alipan-open.png' },
+  { id: 'alipan', short: '阿里', name: '阿里云盘', available: true, logo: '/logos/alipan-open.png' },
   { id: 'mobile', short: '移动', name: '移动云盘', available: false, logo: '/logos/139-2.png' },
   { id: 'ecloud', short: '翼', name: '天翼云盘', available: false, logo: '/logos/cloud189.png' },
   { id: 'ctt', short: '城', name: '城通网盘', available: false, logo: '/logos/ctfile.png' },

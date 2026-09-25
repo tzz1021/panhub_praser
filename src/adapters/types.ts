@@ -167,6 +167,23 @@ export interface PanLimits {
   linkExpiryNote?: string;
   /** etag 种类/支持情况（v1.1.7：如 UC "不支持"；未知不填显示 —） */
   etagNote?: string;
+  /* ---------- v1.3.2：UAC 表扩展行（同一数据源，来源 Tzz 2026-09-25 表）---------- */
+  /** 分享凭据有效期说明（stoken / share_token） */
+  shareCredTtlNote?: string;
+  /** 登录凭据有效期说明（pus / auth(JWT) 等） */
+  loginCredTtlNote?: string;
+  /** web 会话激活 / 通用 CDP 续期方式（cookie / 仅 localStorage …） */
+  sessionRenewNote?: string;
+  /** 其他续期方案（Alist OAuth / 反代等；失败经验也写在这里） */
+  altRenewNote?: string;
+  /** 获取目录树（scan）策略说明 */
+  scanStrategyNote?: string;
+  /** 转存（restore）策略说明（是否支持复用、接收者限制） */
+  restoreStrategyNote?: string;
+  /** 下载（download）批量策略说明 */
+  downloadStrategyNote?: string;
+  /** download_url 额外说明（需要的 cookie / referer 等） */
+  downloadUrlNote?: string;
 }
 
 /**
