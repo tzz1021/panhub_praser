@@ -18,12 +18,34 @@ import { useToast } from '../components/Toast';
 import { fetchListSnapshot, renderTreeText, hhmmss } from '../core/listFetcher';
 import { classifyError, isCorsError } from '../core/errors';
 import { getPreferences } from '../core/preferences';
-import { addGlobalLog } from '../core/footprint/globalLog';
+import { addGlobalLog, listGlobalLogs } from '../core/footprint/globalLog';
 import { addLink } from '../core/footprint/links';
 import { getTree, saveTree } from '../core/footprint/trees';
 import { addRecord } from '../core/footprint/records';
 import { appendLog } from '../core/footprint/logs';
-import type { ListSnapshot, ParseSession } from '../core/types';
+import type { ListSnapshot, ParseSession, ScanIssue } from '../core/types';
+
+/**
+ * v1.3.2：扫描问题写全局日志（失败/大宗各一条；本地转发限频排查靠它）。
+ * 格式：`scanner：目录 /xxx 未加载成功（业务码 45001）：message` /
+ *       `scanner：大宗目录 /yyy（250 项 > 阈值 100）已跳过`
+ * 结果页（手动刷新资源列表）复用同一个函数，保证两边日志格式一致。
+ *
+ * 去重：失败目录的日志已由 core/listFetcher 在 fetchListSnapshot 内集中写入（契约 §1），
+ * 这里按“同文案已在最近日志里出现”跳过，避免同一失败目录在日志里出现两行。
+ */
+export function logScanIssues(issues: readonly ScanIssue[]): void {
+  const recent = new Set(listGlobalLogs().slice(0, 20).map((e) => e.message));
+  for (const it of issues) {
+    const msg =
+      it.kind === 'failed'
+        ? `scanner：目录 ${it.path} 未加载成功（业务码 ${it.code ?? 'unknown'}）${it.message ? `：${it.message}` : ''}`
+        : `scanner：大宗目录 ${it.path}（${it.count ?? '?'} 项 > 阈值 ${it.threshold ?? 0}）已跳过`;
+    if (recent.has(msg)) continue;
+    addGlobalLog(msg);
+    recent.add(msg);
+  }
+}
 
 /** 分享链接缩写（日志/足迹命名用，如 uc-dd2ad2345e124） */
 export function linkAbbr(url: string, adapterId: string): string {
@@ -169,6 +191,8 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
             fetchedAt: cached.savedAt,
             fileCount: cached.fileCount,
             totalSize: cached.totalSize,
+            // 复用路径行为不变：缓存快照不存问题清单（目录树节点自带 scanError/bulkSkipped，结果页可从树派生展示）
+            issues: [],
           };
           fromCache = true;
         } else if (cached) {
@@ -180,6 +204,9 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
         addGlobalLog('scanner：开始拉取目录树（并发 2，分页 50/页，同目录翻页节流 250ms）…');
         snap = await fetchListSnapshot(adapter, shareId, shareUrl, {
           passcode: pc,
+          // v1.3.2：扫描深度 + 大宗判定透传给 treeWalker（0 = 不限 / 关闭）
+          maxDepth: prefs.scanDepth,
+          bulkThreshold: prefs.bulkThreshold,
           onProgress: (done, total) => setProgress({ done, total }),
         });
         if (prefs.footprint.keepTrees) {
@@ -197,6 +224,8 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
         // 目录树打印到全局日志（UI 侧对过长树自动折叠）+ 刷新标记（v1.1.4 规范日志）
         addGlobalLog(`=====目录树（${snap.fileCount} 个文件 / ${snap.totalSize} 字节）=====\n${renderTreeText(snap.root)}\n=====目录树结束=====`);
         addGlobalLog(`=====资源列表已刷新，当前${hhmmss(snap.fetchedAt)}=====`);
+        // v1.3.2：失败目录/大宗跳过写全局日志（结果不完整的可见入口）
+        if (snap.issues?.length) logScanIssues(snap.issues);
       }
       // 足迹落库（复用与全量都记：链接查重 / 解析记录 / 日志）
       if (prefs.footprint.keepLinks) {
@@ -287,6 +316,9 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
         rootFile,
         rootPath,
         rootIsShareRoot: false, // 文件夹不是分享根，不带 _fetch_banner/_fetch_share
+        // v1.3.2：jumper 二次获取同样受扫描深度/大宗判定约束（深度从 0 重算）
+        maxDepth: prefs.scanDepth,
+        bulkThreshold: prefs.bulkThreshold,
         onProgress: (done, total) => setProgress({ done, total }),
       });
       // 足迹落库：链接查重 + 解析记录 + 日志（不覆盖 trees 快照，见函数注释）
@@ -317,6 +349,8 @@ export function HomePage({ onParsed, onOpenSettings, pending }: HomePageProps): 
       });
       // 目录树打印到全局日志（UI 侧对过长树自动折叠 + 复制；含 fid）
       addGlobalLog(`=====${hhmmss(snap.fetchedAt)}，已找到目录'${rootPath}'=====\n${renderTreeText(snap.root)}\n=====目录树结束=====`);
+      // v1.3.2：失败目录/大宗跳过写全局日志
+      if (snap.issues?.length) logScanIssues(snap.issues);
     } catch (err) {
       const { category, message } = classifyError(err);
       const ts = Date.now();

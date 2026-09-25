@@ -32,7 +32,7 @@ export interface DirectoryTreeProps {
   onParseFile?: (fid: string) => void;
   /** 解析进行中（禁用按钮，防连点） */
   busy?: boolean;
-  /** 跳转文件夹回调（0B 文件夹二次获取，v1.1.6）；缺省不显示 */
+  /** 跳转文件夹回调（未加载成功 / 大宗跳过的目录二次获取，v1.1.6 / v1.3.2）；缺省不显示按钮 */
   onJumpToFolder?: (node: TreeNode) => void;
   /** 显示属性：文件夹内部文件和子文件夹个数（v1.1.6） */
   showDirProps?: boolean;
@@ -133,7 +133,7 @@ export function DirectoryTree({
                     <span className={`meta-tag ${isDir ? 'meta-tag--folder' : 'meta-tag--file'}`}>
                       {isDir ? 'folder' : 'file'}
                     </span>
-                    {/* v1.1.6 显示属性：文件夹内部文件和子文件夹个数（风控失败的 0B 文件夹无统计） */}
+                    {/* v1.1.6 显示属性：文件夹内部文件和子文件夹个数（未加载成功/大宗跳过的目录无子级，故无统计数据） */}
                     {isDir && showDirProps && dirProps?.get(f.fid) && (
                       <span className="field-hint" style={{ fontSize: 11.5, marginLeft: 2 }}>
                         {dirProps.get(f.fid)!.files} 文件 · {dirProps.get(f.fid)!.dirs} 文件夹
@@ -171,16 +171,41 @@ export function DirectoryTree({
                       {linkStatusLabel(link, f.size)}
                     </span>
                   )}
-                  {/* v1.1.6：风控导致的 0B 文件夹（children=undefined 且 size=0）→ 转到此文件夹（二次获取） */}
-                  {isDir && node.children === undefined && node.size === 0 && onJumpToFolder && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => onJumpToFolder(node)}
-                      title="风控导致该文件夹未能列出目录树，跳转后二次获取（新建相关联的链接任务）"
-                    >
-                      转到此文件夹
-                    </button>
+                  {/* v1.3.2：0B 判据已废弃（children=undefined 且 size=0 混合了空目录/失败/大宗三种语义）——
+                      改按契约字段 scanError / bulkSkipped 分别提示，二者互斥（失败优先）。 */}
+                  {isDir && node.scanError && (
+                    <>
+                      <span className="field-hint" style={{ color: 'var(--danger)', marginRight: 6 }}>
+                        请求业务码 {node.scanError.code}，内容不完整
+                      </span>
+                      {onJumpToFolder && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => onJumpToFolder(node)}
+                          title="上游/转发失败导致该文件夹未能列出目录树，可单独重扫该目录（二次获取，新建相关联的链接任务）"
+                        >
+                          转到此文件夹
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {isDir && node.bulkSkipped && (
+                    <>
+                      <span className="field-hint" style={{ color: 'var(--warn)', marginRight: 6 }}>
+                        大宗（{node.bulkSkipped.count}  &gt;  {node.bulkSkipped.threshold}）
+                      </span>
+                      {onJumpToFolder && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => onJumpToFolder(node)}
+                          title="一级对象数超过阈值，按设置主动跳过（保持折叠），可单独扫描该目录查看"
+                        >
+                          转到此文件夹
+                        </button>
+                      )}
+                    </>
                   )}
                   {!isDir && detail.kind === 'failed' && onParseFile && (
                     <button

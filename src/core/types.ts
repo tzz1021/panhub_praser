@@ -39,6 +39,34 @@ export interface ListSnapshot {
   fileCount: number;
   /** 总大小字节 */
   totalSize: number;
+  /**
+   * 扫描问题清单（v1.3.2 拍板：失败与大宗跳过都要「可见」）。
+   * 空数组 = 本次遍历每个目录都加载成功且没有大宗跳过。
+   */
+  issues: ScanIssue[];
+}
+
+/**
+ * 扫描问题条目（treeWalker 收集 → ListSnapshot.issues → 结果页 banner/行内提示/全局日志）。
+ * 两类语义严格分开，**不允许共用 size=0 表达**（v1.3.2 拍板）：
+ * - failed：该目录 list 请求失败（业务码非 0 / HTTP 非 2xx / 网络失败），内容不完整；
+ * - bulk：一级对象数超过阈值，按设置主动跳过（不递归），内容未展开。
+ */
+export interface ScanIssue {
+  /** 目录路径（相对分享根，如 "dir1/sub"；根目录为 "/"） */
+  path: string;
+  /** 目录 fid（结果页跳转/排查用） */
+  fid: string;
+  /** 类别：failed 加载失败 | bulk 大宗跳过 */
+  kind: 'failed' | 'bulk';
+  /** failed：供应商业务码（数字码/字符串码；无错误码时为 'unknown'） */
+  code?: number | string;
+  /** failed：错误文案（适配器已带中文说明） */
+  message?: string;
+  /** bulk：判定时已知的一级对象数 */
+  count?: number;
+  /** bulk：判定时生效的阈值（便于用户核对设置） */
+  threshold?: number;
 }
 
 /* ============================== 目录树 ============================== */
@@ -55,6 +83,16 @@ export interface TreeNode {
   size: number;
   /** 子节点（仅目录有） */
   children?: TreeNode[];
+  /**
+   * 加载失败信息（v1.3.2）：该目录 list 失败（业务码非 0/HTTP 非 2xx/网络失败）。
+   * 存在即表示「内容不完整」；UI 行内提示「请求业务码 xxx，内容不完整」+ 转到此文件夹。
+   */
+  scanError?: { code: number | string; message: string };
+  /**
+   * 大宗目录跳过（v1.3.2）：该目录一级对象数 > 阈值，按设置不展开（保持折叠）。
+   * 与 scanError 互斥（失败优先）；存在时 children 一定为 undefined。
+   */
+  bulkSkipped?: { count: number; threshold: number };
 }
 
 /** 目录遍历配置（treeWalker） */
@@ -75,6 +113,12 @@ export interface TreeWalkOptions {
   rootPath?: string;
   /** 根节点是否分享根目录（默认 true；jumper 传 false，list 不带 banner/share 扩展字段） */
   rootIsShareRoot?: boolean;
+  /**
+   * 大宗目录阈值（v1.3.2）：某目录**一级对象数**超过本值时不再展开（保持折叠）。
+   * 0/缺省 = 关闭大宗过滤。快通道：一级响应自带 total（uc/quark）= 首屏即可判定；
+   * 慢通道：无 total 的网盘（alipan/xunlei）需收齐一级响应体后再计数比较。
+   */
+  bulkThreshold?: number;
   /** 进度回调：每完成一个节点触发（done/total 为已完成/预估节点数） */
   onProgress?: (done: number, total: number, current: TreeNode) => void;
 }
@@ -237,8 +281,13 @@ export interface Preferences {
   sameDirMode: 'parse' | 'download';
   /** 跨目录：是否保留原始目录结构（仅 aria2/gopeed） */
   keepStructure: boolean;
-  /** 跨目录：扫描深度（0 = 不限） */
+  /** 跨目录：扫描深度（0 = 不限；1 = 只列根层，语义 depth < maxDepth、根 = 0） */
   scanDepth: number;
+  /**
+   * 大宗文件判定（v1.3.2）：某目录**一级对象数**超过本值时整目录保持折叠（不递归）。
+   * 默认 100；0 = 关闭。设置项改动后**下次获取资源列表**生效（已扫出的树不回溯）。
+   */
+  bulkThreshold: number;
   /** 显示文件夹大小 */
   showDirSize: boolean;
   /** 显示属性：文件夹内部文件和子文件夹个数（v1.1.6；默认开） */

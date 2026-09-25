@@ -588,7 +588,7 @@ async function handleWebApi(req, res, pathname, body) {
       accountTempTtlMinutes: Number(getSetting('account_temp_ttl_minutes') ?? 30),
       traceFileDetail: String(getSetting('trace_file_detail') ?? 'full'),
       // 只读说明：白名单/限频在 functions/api/proxy.js（单一实现），backend 不重复维护
-      policy: { whitelist: 'functions/api/proxy.js → ALLOWED_HOST_SUFFIXES', rateLimit: 'proxy.js 内置 60/min/IP', owner: 'proxy.js' },
+      policy: { whitelist: 'functions/api/proxy.js → ALLOWED_HOST_SUFFIXES', rateLimit: 'proxy.js 内置 120/min/IP（v1.3.2 从 60 放宽）', owner: 'proxy.js' },
     });
   }
   if (pathname === '/api/web/settings' && req.method === 'POST') {

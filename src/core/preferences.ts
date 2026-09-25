@@ -25,6 +25,7 @@ export const DEFAULTS: Preferences = {
   sameDirMode: 'parse',
   keepStructure: false,
   scanDepth: 0,
+  bulkThreshold: 100, // v1.3.2：大宗文件判定（一级对象数 > 100 则不展开该目录；0 = 关闭）
   showDirSize: true,
   showDirProps: true, // v1.1.6：文件夹内部文件和子文件夹个数
   showEtag: false, // v1.1.7：校验和列（UC 的 md5 来自 download/列表响应，需 base64 转码；默认关）

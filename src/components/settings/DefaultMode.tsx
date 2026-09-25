@@ -22,7 +22,9 @@ export function DefaultMode({ prefs, onChange }: DefaultModeProps): JSX.Element 
       <div className="switch-row">
         <div>
           <div className="switch-label">扫描深度</div>
-          <div className="switch-sub">0 = 不限</div>
+          <div className="switch-sub">
+            0 = 不限；1 = 只列根层（depth &lt; maxDepth，根 = 0）；jumper（转到此文件夹）二次获取时深度从 0 重算
+          </div>
         </div>
         <input
           className="input"
@@ -32,6 +34,24 @@ export function DefaultMode({ prefs, onChange }: DefaultModeProps): JSX.Element 
           style={{ width: 90, padding: '6px 10px' }}
           value={prefs.scanDepth}
           onChange={(e) => onChange({ scanDepth: Math.max(0, Number(e.target.value) || 0) })}
+        />
+      </div>
+      {/* v1.3.2：大宗文件判定（一级对象数超阈值则该目录保持折叠，不递归） */}
+      <div className="switch-row">
+        <div>
+          <div className="switch-label">大宗文件判定</div>
+          <div className="switch-sub">
+            该目录下一级对象数量超过右侧阈值则不展开该目录（保持折叠，可用「转到此文件夹」单独查看）；0 = 关闭；改动后下次获取资源列表生效
+          </div>
+        </div>
+        <input
+          className="input"
+          type="number"
+          min={0}
+          style={{ width: 90, padding: '6px 10px' }}
+          value={prefs.bulkThreshold}
+          title="该目录下一级对象数量超过本值则不展开（0 = 关闭）"
+          onChange={(e) => onChange({ bulkThreshold: Math.max(0, Number(e.target.value) || 0) })}
         />
       </div>
       <div className="switch-row">

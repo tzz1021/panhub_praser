@@ -11,7 +11,8 @@
  * 目录树文本渲染（renderTreeText）供全局日志打印，UI 侧对过长树自动折叠。
  */
 import type { PanAdapter } from '../adapters/types';
-import { buildTree } from './treeWalker';
+import { addGlobalLog } from './footprint/globalLog';
+import { buildTreeWithIssues } from './treeWalker';
 import type { ListSnapshot, TreeNode } from './types';
 
 /** 统计树中文件数（递归；ls 快照用，核心工具不依赖页面） */
@@ -43,6 +44,16 @@ export interface ListFetchOptions {
   rootPath?: string;
   /** v1.1.6 jumper：根节点是否分享根（jumper 传 false，不带 banner/share 扩展字段） */
   rootIsShareRoot?: boolean;
+  /**
+   * v1.3.2 大宗目录阈值（一级对象数超此值则该目录不展开）；0/缺省 = 关闭。
+   * 直接透传 buildTree（preferences.bulkThreshold，改动后下次获取资源列表生效）。
+   */
+  bulkThreshold?: number;
+  /**
+   * 扫描深度（契约 §3.4）：0/缺省 = 不限；1 = 只列根层（语义 depth < maxDepth、根 = 0）。
+   * 调用方传 prefs.scanDepth；jumper（转到此文件夹）二次获取时深度从 0 重算。
+   */
+  maxDepth?: number;
 }
 
 /**
@@ -66,7 +77,8 @@ export async function fetchListSnapshot(
     ({ stoken } = await adapter.getToken({ shareId, passcode: options?.passcode || undefined }));
   }
   // 第 2 步：目录树（递归 + 大小聚合，并发 2 + 同目录翻页节流 250ms，v1.1.6）
-  const root = await buildTree(
+  // v1.3.2：遍历同时收集 issues（失败目录 / 大宗跳过目录），回填 ListSnapshot.issues
+  const { root, issues } = await buildTreeWithIssues(
     { adapter, shareId, stoken },
     {
       recursive: true,
@@ -76,8 +88,20 @@ export async function fetchListSnapshot(
       rootFile: options?.rootFile,
       rootPath: options?.rootPath,
       rootIsShareRoot: options?.rootIsShareRoot,
+      // v1.3.2：大宗目录阈值透传（0/缺省 = 关闭）
+      bulkThreshold: options?.bulkThreshold,
+      // v1.3.2（§3.4）：扫描深度透传（0/缺省 = 不限）
+      maxDepth: options?.maxDepth,
     },
   );
+  // 失败目录写全局日志（v1.3.2 契约 §1）：便于事后排查哪些目录没扫到
+  for (const issue of issues) {
+    if (issue.kind === 'failed') {
+      addGlobalLog(
+        `scanner：目录 ${issue.path} 未加载成功（业务码 ${issue.code}）：${issue.message}`,
+      );
+    }
+  }
   return {
     shareId,
     url,
@@ -87,6 +111,7 @@ export async function fetchListSnapshot(
     fetchedAt: Date.now(),
     fileCount: countFiles(root),
     totalSize: root.size,
+    issues,
   };
 }
 
@@ -102,6 +127,7 @@ export function hhmmss(ms: number): string {
  * bars 风格：`|--- ` 前缀，每深一层追加 `|   `；目录附聚合大小 + fid（v1.1.6，
  * 供分析 0B 文件夹手动拼跳转链接；导出目录树 md 不包含这些数据），文件附大小。
  * 过长时由 UI 侧折叠（HistoryPage 全局日志渲染器检测 `=====目录树` 头自动折叠）。
+ * v1.3.2：目录行额外标注失败（业务码）/大宗跳过（便于全局日志排查），其他格式不变。
  */
 export function renderTreeText(root: TreeNode): string {
   const lines: string[] = [];
@@ -114,7 +140,13 @@ export function renderTreeText(root: TreeNode): string {
     const size = formatSize(node.size);
     // v1.1.6：目录行附 fid（0B 文件夹排查/手动跳转用），文件行不附
     const fidPart = node.file.dir ? ` · fid:${node.file.fid}` : '';
-    lines.push(`${prefix}${name}${isRoot ? '' : `  (${size}${fidPart})`}`);
+    // v1.3.2：失败/大宗目录行内标注（两者互斥，失败优先）
+    const note = node.scanError
+      ? `（未加载成功·业务码 ${node.scanError.code}）`
+      : node.bulkSkipped
+        ? `（大宗目录 ${node.bulkSkipped.count} 项，已跳过）`
+        : '';
+    lines.push(`${prefix}${name}${isRoot ? '' : `  (${size}${fidPart})`}${note}`);
     if (node.children) {
       for (const child of node.children) walk(child, depth + 1);
     }

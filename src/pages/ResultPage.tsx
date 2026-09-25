@@ -43,8 +43,43 @@ import { exportTask, exportTreeMd } from '../tasks/export';
 import { DOWNLOADER_PRESETS, loadDownloaderConfig, pushFilesToDownloader } from '../utils/downloader';
 import { formatRemain, formatSize, formatTime } from '../utils/format';
 import { entryExpiryMs, isLinkGreen, isLinkUsable, isLinkYellow, linkDetailOf } from '../utils/linkStatus';
-import type { ExportFile, LinkEntry, LinkResult, ParseSession, TaskKind, TreeNode } from '../core/types';
-import { linkAbbr } from './HomePage';
+import type { ExportFile, LinkEntry, LinkResult, ParseSession, ScanIssue, TaskKind, TreeNode } from '../core/types';
+import { linkAbbr, logScanIssues } from './HomePage';
+
+/**
+ * v1.3.2：扫描问题提示「不再弹出」的本机记忆键（localStorage）。
+ * 只是宽松提示的免打扰开关——失败/大宗目录的**行内提示不受它影响**。
+ */
+const ISSUES_DISMISSED_KEY = 'pan-web:scan-issues-banner:v1';
+
+/** 读取「不再弹出」记忆（隐私模式/配额异常时当作未勾选） */
+function readIssuesDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(ISSUES_DISMISSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * v1.3.2：从目录树派生扫描问题清单（failed / bulk）。
+ * 会话（ParseSession）未携带 ListSnapshot.issues，而失败/大宗两类语义已落在
+ * TreeNode.scanError / TreeNode.bulkSkipped 上（互斥，失败优先），因此从树派生与快照
+ * issues 等价；能拿到快照 issues 的路径（手动刷新）优先用快照值。
+ */
+function deriveIssues(root: TreeNode): ScanIssue[] {
+  const out: ScanIssue[] = [];
+  const walk = (n: TreeNode): void => {
+    if (n.scanError) {
+      out.push({ path: n.path, fid: n.file.fid, kind: 'failed', code: n.scanError.code, message: n.scanError.message });
+    } else if (n.bulkSkipped) {
+      out.push({ path: n.path, fid: n.file.fid, kind: 'bulk', count: n.bulkSkipped.count, threshold: n.bulkSkipped.threshold });
+    }
+    if (n.children) for (const c of n.children) walk(c);
+  };
+  walk(root);
+  return out;
+}
 
 /** 文件相对路径的父目录 */
 function parentOf(path: string): string {
@@ -100,6 +135,13 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   const [stoken, setStoken] = useState(session.stoken);
   const [listAt, setListAt] = useState(session.parsedAt);
   const [refreshingList, setRefreshingList] = useState(false);
+  // v1.3.2：本次扫描的问题清单（失败/大宗）+ 提示免打扰开关（仅本机）
+  const [issues, setIssues] = useState<ScanIssue[]>(() => deriveIssues(session.root));
+  const [issuesDismissed, setIssuesDismissed] = useState<boolean>(() => readIssuesDismissed());
+  // 会话树换了一份（同一个 ResultPage 实例被复用）时同步问题清单；刷新树走 refreshList 自己的 setIssues
+  useEffect(() => {
+    setIssues(deriveIssues(session.root));
+  }, [session.root]);
 
   // 全部叶子文件（一次计算，树固定）
   const allLeaves = useMemo(() => collectLeaves(root), [root]);
@@ -615,6 +657,9 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
     try {
       // v1.1.6 jumper：按目标文件夹重新扫描（不是分享根）；stoken 复用当前会话的（避免额外 token 接口）
       const snap = await fetchListSnapshot(adapter, shareId, url, {
+        // v1.3.2：扫描深度 + 大宗判定透传（刷新同样受设置约束）
+        maxDepth: prefs.scanDepth,
+        bulkThreshold: prefs.bulkThreshold,
         onProgress: (done, total) => setFetchProgress({ done, total }),
         stoken: session.jump ? stoken : undefined,
         rootFile: session.jump?.rootFile,
@@ -624,6 +669,10 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
       setRoot(snap.root);
       setStoken(snap.stoken);
       setListAt(snap.fetchedAt);
+      // v1.3.2：刷新后的扫描问题（优先用快照 issues，没有就从新树派生）+ 写全局日志
+      const nextIssues = snap.issues?.length ? snap.issues : deriveIssues(snap.root);
+      setIssues(nextIssues);
+      logScanIssues(nextIssues);
       setLinks(null); // 映射可能变化（增删文件/令牌失效），全部作废重新解析
       // v1.1.5.3：足迹里的直链结果同步作废（fid 映射可能已变化）
       await clearPraseByShareId(shareId).catch(() => undefined);
@@ -920,12 +969,66 @@ export function ResultPage({ session, onBack, onJump }: ResultPageProps): JSX.El
   };
 
   /* ---------- 渲染 ---------- */
-  // v1.1.5.2：仅统计可用直链（绿+黄）；选中含绿色文件时批量解析按钮置灰（防重复刷 prase）
+  // v1.3.2：仅统计可用直链（绿+黄）；选中含绿色文件时批量解析按钮置灰（防重复刷 prase）
   const linkedOkCount = links ? selectedFiles.filter((f) => isLinkUsable(links.get(f.fid), f.size)).length : 0;
   const hasGreenSelected = selectedFiles.some((f) => isLinkGreen(links?.get(f.fid), f.size));
 
+  // v1.3.2：扫描问题 banner（失败/大宗）—— 明细计数 + 去重业务码
+  const failedIssues = issues.filter((i) => i.kind === 'failed');
+  const bulkIssues = issues.filter((i) => i.kind === 'bulk');
+  const failedCodes = [...new Set(failedIssues.map((i) => String(i.code ?? 'unknown')))];
+  const failedCodesLabel = failedCodes.slice(0, 5).join('、') + (failedCodes.length > 5 ? '…' : '');
+  const bulkThresholdLabel = bulkIssues[0]?.threshold ?? prefs.bulkThreshold;
+  const showIssuesBanner = issues.length > 0 && !issuesDismissed;
+
   return (
     <>
+      {/* v1.3.2：本次扫描不完整提示（宽松提示，非错误；「不再弹出」只关本 banner，不动行内提示） */}
+      {showIssuesBanner && (
+        <div className="card" style={{ borderLeft: '3px solid var(--warn)' }}>
+          <div className="card-body">
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 280 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-strong)' }}>扫描结果不完整</div>
+                <div className="field-hint" style={{ fontSize: 12.5, marginTop: 4 }}>
+                  {failedIssues.length > 0 && (
+                    <span style={{ color: 'var(--danger)' }}>
+                      {failedIssues.length} 个目录未加载成功（业务码 {failedCodesLabel}），结果不完整
+                    </span>
+                  )}
+                  {failedIssues.length > 0 && bulkIssues.length > 0 && ' · '}
+                  {bulkIssues.length > 0 && (
+                    <span style={{ color: 'var(--warn)' }}>
+                      {bulkIssues.length} 个大宗目录已跳过（阈值 {bulkThresholdLabel}）
+                    </span>
+                  )}
+                </div>
+                <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 12.5, lineHeight: 1.7, color: 'var(--text-dim)' }}>
+                  <li>已放宽本地转发限制（120 次/分/IP）：若大量文件夹出现业务码非 200，多半是本站转发层限频，不是上游风控。</li>
+                  <li>请打开浏览器 devtools → Network，找到 scan 响应体以确认。</li>
+                  <li>隐私：总部后端不记录目录树，只做限频。</li>
+                  <li>有大宗目录树查看需求请自建转发代理；scan 完毕后切回原有后端不影响使用（总部公共账号池不受影响）。</li>
+                </ul>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  setIssuesDismissed(true);
+                  try {
+                    window.localStorage.setItem(ISSUES_DISMISSED_KEY, '1');
+                  } catch {
+                    /* 配额/隐私模式静默 */
+                  }
+                }}
+                title="本机不再自动显示该提示（失败/大宗目录的行内提示不受影响）"
+              >
+                不再弹出
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* 工具条：返回 + 链接信息 + 资源列表获取时间（v1.1.5：直链倒计时下沉到文件行标签） */}
       <div className="card">
         <div className="card-head">

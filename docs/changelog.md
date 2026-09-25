@@ -3,6 +3,43 @@
 > 面向开发者（repo:/dev/ 入口）。面向用户的说明见 README.md。
 > 约定：`## [版本] 日期` + 三块（新增 / 修复 / 变更）。
 
+## [1.3.2] 2026-09-23 —— 扫描完整性 + 大宗目录过滤（bug 修复）
+
+
+> 依据：Tzz 2026-09-23 对 `1.3.1.next` 三条待拍板项的批复，完整契约见 `docs/scan-bulk-plan.md`。
+
+### 新增
+- **扫描问题可见（failed / bulk 语义严格分开）**：`TreeNode` 新增 `scanError{code,message}`（目录 list 失败：
+  业务码非 0 / HTTP 非 2xx / 网络失败）与 `bulkSkipped{count,threshold}`（大宗主动跳过），`ListSnapshot` 新增
+  `issues: ScanIssue[]`；`buildTreeWithIssues()` 在遍历中收集。**不再用 `children===undefined && size===0`
+  表达任何语义**（该约定混合了空目录/失败/大宗三种情况，是 1.3.1 静默丢数据的帮凶）。
+- **大宗目录过滤**：只按**一级对象数**判定。快通道 = 一级响应自带 `total` 的网盘（uc/quark）首屏即可判定，
+  **不翻页、不递归**；慢通道 = 无 `total` 的网盘（alipan/xunlei）收齐一级响应体后计数比较。超阈值目录
+  `bulkSkipped` 标记并保持折叠（`children` 不建）。阈值默认 **100**，见 `Preferences.bulkThreshold`（0 = 关闭）。
+- **设置项「大宗文件判定」**：设置 → 扫描深度下方（`components/settings/DefaultMode.tsx`），改动后**下次获取资源列表**生效。
+- **结果页扫描提示**：`issues` 非空时顶部出提示卡（失败/大宗计数 + 业务码去重列表），逐条写明
+  「已放宽本地转发限制（120 次/分/IP）」「devtools → Network → scan 响应体确认业务码」「隐私：总部后端不记录目录树，只做限频」
+  「大宗目录树需求请自建转发代理，scan 完切回原后端不影响使用」，带「不再弹出」按钮（localStorage 本机记忆，
+  只关该提示卡，**不影响失败/大宗目录的行内提示**）。
+- **目录行行内提示 + 主操作**：失败目录显示「请求业务码 xxx，内容不完整」，大宗目录显示
+  「大宗目录（N 项 > 阈值 T），未展开」，两种情况的「转到此文件夹」都升为该行主操作按钮（复用 v1.1.6 jumper）。
+- **隐私**：`operation === 'scan'` 时不再落 trace 内容（D1 的 `body_preview` 置空、`file_hits` 整表跳过），
+  只保留行级统计 —— 兑现结果页「总部后端不记录目录树」的承诺。
+
+### 修复
+- **扫描失败被静默记 0（1.3.1.next 的已知问题）**：单目录 list 失败不再只留下 `size=0/children=undefined`，
+  改记 `scanError` 并进 `issues` + 全局日志；同一条 UC 分享实测的「4.18 GiB → 1.12 GiB」不再不可见。
+- **「扫描深度」死配置接线**：`fetchListSnapshot` 以前从未把 `maxDepth` 传给 `buildTree`，现改为三处调用
+  （HomePage 常规/jumper、ResultPage 刷新资源列表）都传 `prefs.scanDepth`；语义 `depth < maxDepth`、根 = 0，
+  jumper 二次获取时深度从 0 重算（设置文案已写明）。
+- 0B 文件夹「转到此文件夹」判据由「空文件夹」改为业务码/大宗标记，避免把真空目录误报为风控失败。
+
+### 变更
+- **代理限频 60 → 120 req/min/IP**（`functions/api/_shared/proxy-core.js`）：429 基本不是上游风控，而是本站
+  转发层自己限的；按「1s 3 次 × 并发 2」标定放宽。被限频者请自建转发代理（结果页文案已说明）。
+- `scripts/proxy.smoke.mjs` 限频断言同步：由「61 次 → 429」改为「前 120 次放行 + 第 121 次 429」。
+- `backend/src/server.js` 只读策略文案、`docs/transport.md` 限频口径同步为 120。
+
 ## [1.3.1.next] 2026-09-18 —— 内测反馈批次（hop 下沉 / UC hash / 夜间模式 / Windows launcher）
 
 > 状态：**已实现待审**（未 commit / 未 push；tag 由 Tzz 定，`1.3.1.next` 为占位）。
@@ -43,7 +80,7 @@
 - 前端说明文案精简：CookieInputModal 的两段托管提示合并进蓝色 inline 提示块；
   SPA 内不再出现「hop / 后端取号」这类内部术语（链路细节归 functions）。
 
-### 已知问题（已定位，**未修**，待拍板）
+### 已知问题（已定位，**已在 [未发布] 2026-09-23 修复**）
 - **扫描失败被静默记 0**：`treeWalker` 的 catch 把失败目录 `size=0 / children=undefined`，
   失败目录不递归 → 调用数与进度条同步变小 → **结果不完整却看起来完整**。
   实测（同一条 UC 分享）：直连 223 次调用 = 4.18 GiB；经 CF Functions 60/min 限频 →

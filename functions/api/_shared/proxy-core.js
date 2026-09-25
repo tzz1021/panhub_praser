@@ -19,7 +19,7 @@
  * 安全模型（docs/transport.md §关键设计决策 3）：
  *   1. X-Proxy-Token 校验（env PROXY_TOKEN，部署时生成）→ 401
  *   2. 目标域名白名单（uc.cn / 后续接入的网盘域）→ 403
- *   3. 每 IP 限频（60 req/min，内存滑动窗口，per-isolate 尽力而为）→ 429
+ *   3. 每 IP 限频（120 req/min，内存滑动窗口，per-isolate 尽力而为）→ 429
  *
  * 边界：
  *   - 只转发 API JSON，不转发文件流（直链是 OSS 签名 URL，用户浏览器直连下载）
@@ -55,7 +55,10 @@ const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'DELETE'];
 const MAX_BODY_BYTES = 1024 * 1024; // 1MB，API JSON 足够
 const UPSTREAM_TIMEOUT_MS = 20_000; // API JSON 小流量，20s 封顶
 
-const RATE_LIMIT_PER_MIN = 60; // 每 IP 每分钟
+const RATE_LIMIT_PER_MIN = 120; // 每 IP 每分钟（v1.3.2 拍板：60 → 120，宽松优先）
+// 依据（2026-09/10 讨论）：429 基本不是上游给的，而是本站代理层自己限的；单标签页按 1s 3 次
+// 并发 2 算标，60s 全打满也才 ~180 请求，且大多数分享没有这么多子目录 —— 给 120 足够，
+// 有人抱怨就请其自建转发代理（见结果页 banner 文案）。
 const RATE_WINDOW_MS = 60_000;
 
 /** per-isolate 内存滑动窗口（CF 是分布式隔离，这里只是"简单限频"；
@@ -343,6 +346,7 @@ function extractFileHits(bodyText) {
  * 阶段一（后台立即执行）：INSERT proxy_logs（frontend_id/ts/url/operation/method/via='cloud'/client_ip）；
  * 阶段二（complete() 后）：UPDATE（pan/account_id/req_status/req_ms/duration_ms/body_preview）+
  *   解析响应体批量 INSERT file_hits。上游失败 complete({status:null}) → 行留 req_status NULL（看板标严重警告）。
+ *   v1.3.2：operation === 'scan' 时 body_preview 置空且不落 file_hits（目录树不记录，兑现结果页承诺）。
  * 错误分支只落 warning 日志，不阻断请求。
  */
 function makeCloudTrace({ env, request, started, frontendId, pan, accountId, operation, method, url }) {
@@ -370,20 +374,25 @@ function makeCloudTrace({ env, request, started, frontendId, pan, accountId, ope
     const done = await completePromise;
     if (!done) return;
     const { status, bodyText, reqMs, durationMs } = done;
+    // v1.3.2 隐私承诺（结果页 banner 文案兑现）：scan（目录树）不落内容 ——
+    // body_preview 置空、file_hits 整体跳过，只保留行级统计（分类/状态码/耗时）。
+    // 理由：scan 响应体就是目录树本身（fid/文件名/md5/size），正是我们承诺不记录的东西。
+    const recordContent = operation !== 'scan';
     try {
       await db
         .prepare(
           "UPDATE proxy_logs SET pan=?, account_id=?, req_status=?, req_ms=?, duration_ms=?, body_preview=? WHERE frontend_id=? AND via='cloud'",
         )
-        .bind(pan, accountId, status, reqMs, durationMs, (bodyText ?? '').slice(0, 500), frontendId)
+        .bind(pan, accountId, status, reqMs, durationMs, recordContent ? (bodyText ?? '').slice(0, 500) : null, frontendId)
         .run();
     } catch (err) {
       console.warn('[proxy] D1 trace 阶段二 UPDATE 失败：', err?.message ?? String(err));
     }
     try {
       // v1.3.1 隐私：文件明细粒度（env.TRACE_FILE_DETAIL = full | safe | off，缺省 full）
+      // v1.3.2：scan（目录树）一律不落 file_hits，见上方 recordContent 注释
       const detail = String(env.TRACE_FILE_DETAIL ?? 'full');
-      const hits = detail === 'off' ? [] : extractFileHits(bodyText ?? '');
+      const hits = !recordContent || detail === 'off' ? [] : extractFileHits(bodyText ?? '');
       const safeHits = detail === 'safe' ? hits.map((h) => ({ ...h, name: null, md5: null })) : hits;
       for (const h of safeHits) {
         await db

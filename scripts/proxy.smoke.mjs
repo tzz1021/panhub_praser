@@ -43,12 +43,14 @@ assert('内嵌凭据 -> 400', r.status === 400, `got ${r.status}`);
 r = await call(null, {});
 assert('坏 body -> 400', r.status === 400, `got ${r.status}`);
 
-// 7. 限频：61 次 -> 最后一次 429
+// 7. 限频：v1.3.2 放宽到 120/min —— 前 120 次放行，第 121 次 429
 let last = null;
-for (let i = 0; i < 61; i++) {
+for (let i = 0; i < 120; i++) {
   last = await call({ url: 'https://pc-api.uc.cn/x' }, { ip: '9.9.9.9' });
 }
-assert('限频 61 次 -> 429', last.status === 429, `got ${last.status}`);
+assert('限频：前 120 次未触发 429', last.status !== 429, `got ${last.status}`);
+last = await call({ url: 'https://pc-api.uc.cn/x' }, { ip: '9.9.9.9' });
+assert('限频 121 次 -> 429', last.status === 429, `got ${last.status}`);
 // 换 IP 不受影响
 r = await call({ url: 'https://pc-api.uc.cn/x' }, { ip: '8.8.8.8' });
 assert('换 IP 放行', r.status !== 429 && r.status !== 401 && r.status !== 403, `got ${r.status}`);

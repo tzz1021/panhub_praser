@@ -59,7 +59,7 @@ Access-Control-Allow-Origin: *
 代理端校验（顺序）：
 1. `X-Proxy-Token` header ≠ 部署时配置的 token → 401
 2. `url` 域名 ∉ 白名单（uc.cn / 后续接入的网盘域）→ 403
-3. 每 IP 限频（如 60 req/min）→ 429
+3. 每 IP 限频（120 req/min，v1.3.2 从 60 放宽）→ 429
 
 ## CF Pages Functions 实现（推荐，一个项目搞定）
 
